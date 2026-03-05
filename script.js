@@ -134,7 +134,7 @@ function initStockfish() {
 
     return new Promise((resolve, reject) => {
         if (stockfish) sfTerminate();
-        stockfish = new Worker("stockfish-18.js");
+        stockfish = new Worker("stockfish-18.js#https://github.com/nmrugg/stockfish.js/releases/download/v18.0.0/stockfish-18.wasm");
         stockfish.onerror = err => {
             console.error("Stockfish worker error:", err);
             const rej = sfPending?.reject || reject;
@@ -142,7 +142,7 @@ function initStockfish() {
             rej("worker error");
         };
         stockfish.onmessage = sfOnMessage; // set once, never overwritten
-        const timeout = setTimeout(() => { console.error("Stockfish init timeout"); sfTerminate(); reject("init timeout"); }, 100000);
+        const timeout = setTimeout(() => { console.error("Stockfish init timeout"); sfTerminate(); reject("init timeout"); }, 60000);
         sfPending = { type: "init", resolve, reject, timeout };
         stockfish.postMessage("uci");
         // isready wird erst nach uciok geschickt (siehe sfOnMessage)
@@ -856,4 +856,4 @@ document.addEventListener("keydown", e => {
 });
 
 showScreen("homeScreen");
-initStockfish().catch(() => { });
+initStockfish().catch(() => { }); // WASM beim Seitenstart vorladen
