@@ -597,6 +597,10 @@ textarea#pgnInput {
     color: #fff
 }
 
+.badge-excellent{
+    background: #26ff1c;
+}
+
 .badge-best {
     background: #6bab40;
     color: #fff
@@ -617,7 +621,7 @@ textarea#pgnInput {
     color: #111
 }
 
-.badge-mistake {
+.badge-missed {
     background: #e07c2a;
     color: #fff
 }

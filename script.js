@@ -87,70 +87,196 @@ function getBotMove(fen, elo) {
 }
 
 // ═══════════════════════════════════════════════════════
-// CLASSIFICATION
-// Brilliant:   Aufopferung eines Stückes ohne Vorteil zu verlieren (delta <= 50cp)
-// Great Move:  Einziger Zug der den Vorteil beibehält (delta <= 10cp, sehr gut)
-// Best Move:   Bester Engine-Zug (delta <= 5cp)
-// Excellent:   Keine Verschlechterung um mehr als 10cp
-// Good:        Keine höhere Abweichung als 25cp
-// Inaccuracy:  Abweichung > 25cp, aber kein Verlust des entscheidenden Vorteils
-// Mistake:     Zug kostet klar Vorteil, aber nicht das Spiel (von +100 auf ~0)
-// Blunder:     Zug hat das Spiel gekostet (von Vorteil auf -100 oder schlechter)
+// SACRIFICE DETECTION
+// A true sacrifice = piece moves to a square where, after all
+// recaptures are resolved, the moving side has lost material.
+// We simulate the capture sequence (SEE - Static Exchange Eval).
 // ═══════════════════════════════════════════════════════
-function isSacrifice(g, fc, fr, tc, tr, piece, ms) {
-    const cap = g[idx(tc, tr)];
-    const capVal = cap ? PIECE_VALUES[cap.type] : 0;
-    if (PIECE_VALUES[piece.type] <= capVal) return false;
-    // Moving into an attacked square without equal/better recapture
-    return sqAttacked(g, tc, tr, piece.color === "white" ? "black" : "white", ms)
+function staticExchangeEval(g, fc, fr, tc, tr, piece, ms) {
+    // Returns net material gain for the moving side (negative = loss)
+    const capturedVal = g[idx(tc, tr)] ? PIECE_VALUES[g[idx(tc, tr)].type] : 0;
+    if (capturedVal === 0 && !sqAttacked(g, tc, tr, piece.color === "white" ? "black" : "white", ms)) {
+        return 0; // No capture and square not attacked → not a sacrifice
+    }
+    // Simple SEE: just check if piece is hanging after the move
+    const enemy = piece.color === "white" ? "black" : "white";
+    if (!sqAttacked(g, tc, tr, enemy, ms)) return capturedVal; // Safe, not a sacrifice
+    // Square is recaptured: net = what we gain - what we lose
+    return capturedVal - PIECE_VALUES[piece.type];
 }
 
-function classifyMove(delta, sacrificed, prevEv, currEv, movedColor) {
-    // delta = how much cp the MOVER lost (positive = bad for mover)
-    // Always from mover's perspective
+function isSacrifice(g, fc, fr, tc, tr, piece, ms) {
+    // A sacrifice is when we move a piece to a square where we lose material
+    // after the recapture sequence (SEE result is negative)
+    const see = staticExchangeEval(g, fc, fr, tc, tr, piece, ms);
+    return see < -50; // Losing more than 50cp in material = sacrifice
+}
 
-    // Checkmate delivered → best possible
-    if (currEv && currEv.mate !== null) {
-        const good = movedColor === "white" ? currEv.mate > 0 : currEv.mate < 0;
-        if (good) return { key: "best", sym: "★", label: "Bester Zug (Matt!)", css: "badge-best" }
-    }
+// ═══════════════════════════════════════════════════════
+// GREAT MOVE DETECTION
+// A "Great" move is the only move that maintains the advantage.
+// We find all legal moves and check how many hold the eval within threshold.
+// ═══════════════════════════════════════════════════════
+async function findGreatMoveCandidate(g, color, ms, prevEvalCp, turn) {
+    // Returns true if the played move was the ONLY move that kept the advantage
+    // This is called during pre-analysis with MultiPV
+    // We'll use a simplified check: evaluate top moves with MultiPV=3
+    // and see if only 1 move holds the position
+    return false; // Placeholder — see integration below
+}
 
-    // Was previously facing forced mate, any escape is "good"
-    if (prevEv && prevEv.mate !== null) {
-        const wasBad = movedColor === "white" ? prevEv.mate < 0 : prevEv.mate > 0;
-        if (wasBad && delta < 100) return { key: "good", sym: "✓", label: "Gut", css: "badge-good" }
-    }
+// ═══════════════════════════════════════════════════════
+// CLASSIFICATION (new rules)
+//
+// Brilliant:     Sacrifice (SEE negative) without losing advantage (delta ≤ 50cp)
+// Great:         The only move that maintained the advantage (only best engine move holds)
+// Best:          The played move matches the engine's best move
+// Excellent:     Lost < 10cp
+// Good:          Lost < 30cp
+// Inaccuracy:    In advantage → still advantage but slightly worse;
+//                Not in advantage → any move losing < 100cp
+// Blunder:       In advantage → now equal or worse (≥ 0cp swing to opponent);
+//                Equal → opponent now has advantage;
+//                Behind → extreme drop or leads to forced mate
+// Missed Chance: A "Great" move existed but wasn't played
+// ═══════════════════════════════════════════════════════
+function classifyMove(delta, sacrificed, prevEv, currEv, movedColor, playedMoveUCI, engineBestUCI, isOnlyGoodMove) {
+    // delta = cp lost by the mover (positive = bad for mover)
+    // All eval values (prevEv.cp, currEv.cp) are from WHITE's perspective
 
-    // Brilliant: sacrifice without losing the advantage
-    if (sacrificed && delta <= 50) return { key: "brilliant", sym: "!!", label: "Brillant", css: "badge-brilliant" };
-
-    // Classify by cp loss (delta = cp lost by mover)
-    if (delta <= 5) return { key: "best", sym: "★", label: "Bester Zug", css: "badge-best" };
-    if (delta <= 10) return { key: "great", sym: "!", label: "Großartig", css: "badge-great" };
-    if (delta <= 25) return { key: "excellent", sym: "✓", label: "Ausgezeichnet", css: "badge-excellent" };
-    if (delta <= 100) return { key: "good", sym: "·", label: "Gut", css: "badge-good" };
-
-    // Stronger losses — check position context
-    // prevEv.cp from white's perspective, convert to mover's perspective
     const prevForMover = movedColor === "white" ? prevEv.cp : -prevEv.cp;
     const currForMover = movedColor === "white" ? currEv.cp : -currEv.cp;
 
-    // Inaccuracy: lost some advantage but still not losing
-    if (delta <= 250 && currForMover > -50) return { key: "inaccuracy", sym: "?!", label: "Ungenauigkeit", css: "badge-inaccuracy" };
+    // Was the played move the engine's best move?
+    const playedBestMove = playedMoveUCI && engineBestUCI &&
+        playedMoveUCI.slice(0, 4) === engineBestUCI.slice(0, 4);
 
-    // Blunder: was winning (+100), now losing (-100) or worse
-    if (prevForMover >= 100 && currForMover <= -100) return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
+    // ── Checkmate delivered ──
+    if (currEv && currEv.mate !== null) {
+        const good = movedColor === "white" ? currEv.mate > 0 : currEv.mate < 0;
+        if (good) return { key: "best", sym: "★", label: "Bester Zug (Matt!)", css: "badge-best" };
+    }
 
-    // Mistake: was winning, now roughly equal or slightly worse
-    if (prevForMover >= 100 && currForMover <= 50) return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" };
+    // ── Was previously facing forced mate, managed to avoid it ──
+    if (prevEv && prevEv.mate !== null) {
+        const wasBad = movedColor === "white" ? prevEv.mate < 0 : prevEv.mate > 0;
+        if (wasBad && delta < 50) return { key: "good", sym: "·", label: "Gut", css: "badge-good" };
+    }
 
-    // Large loss but wasn't winning before → inaccuracy/mistake
-    if (delta <= 300) return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" };
+    // ── Brilliant: true sacrifice (SEE negative) + doesn't worsen position ──
+    if (sacrificed && delta <= 50) {
+        return { key: "brilliant", sym: "!!", label: "Brillant", css: "badge-brilliant" };
+    }
 
-    return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" }
+    // ── Best: played move = engine's top move ──
+    if (playedBestMove) {
+        return { key: "best", sym: "★", label: "Bester Zug", css: "badge-best" };
+    }
+
+    // ── Great: only move that maintained the advantage ──
+    if (isOnlyGoodMove && delta <= 30) {
+        return { key: "great", sym: "!", label: "Großartig", css: "badge-great" };
+    }
+
+    // ── Excellent: lost < 10cp ──
+    if (delta <= 10) {
+        return { key: "excellent", sym: "✓", label: "Ausgezeichnet", css: "badge-excellent" };
+    }
+
+    // ── Good: lost < 30cp ──
+    if (delta <= 30) {
+        return { key: "good", sym: "·", label: "Gut", css: "badge-good" };
+    }
+
+    // From here: delta > 30cp — check context for inaccuracy/blunder/mistake
+
+    // ── BLUNDER logic ──
+    // Was in advantage (prevForMover >= 100), now equal or opponent has advantage
+    if (prevForMover >= 100 && currForMover <= 0) {
+        return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
+    }
+    // Was equal (|prevForMover| < 100), now opponent has clear advantage
+    if (Math.abs(prevForMover) < 100 && currForMover <= -100) {
+        return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
+    }
+    // Was behind, but extreme drop (lost 300+ cp more)
+    if (prevForMover < -100 && delta >= 300) {
+        return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
+    }
+    // Opponent now has forced mate
+    if (currEv.mate !== null) {
+        const opponentMating = movedColor === "white" ? currEv.mate < 0 : currEv.mate > 0;
+        if (opponentMating) return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
+    }
+
+    // ── MISSED CHANCE: a great move existed but wasn't played ──
+    if (isOnlyGoodMove && delta > 30) {
+        return { key: "missed", sym: "⊘", label: "Verpasste Chance", css: "badge-missed" };
+    }
+
+    // ── INACCURACY logic ──
+    // In advantage → still some advantage but slightly worse
+    if (prevForMover >= 100 && currForMover > 0 && delta > 30 && delta <= 200) {
+        return { key: "inaccuracy", sym: "?!", label: "Ungenauigkeit", css: "badge-inaccuracy" };
+    }
+    // Not in advantage → any move losing < 100cp more
+    if (prevForMover < 100 && delta < 100) {
+        return { key: "inaccuracy", sym: "?!", label: "Ungenauigkeit", css: "badge-inaccuracy" };
+    }
+
+    // ── MISTAKE: clear advantage lost but not a blunder ──
+    if (prevForMover >= 100 && currForMover > 0 && delta > 200) {
+        return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" };
+    }
+    if (delta >= 100 && delta < 300) {
+        return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" };
+    }
+
+    return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
 }
 
 function evalToLabel(cp) { const a = Math.abs(cp), s = cp >= 0 ? "Weiß" : "Schwarz"; if (a < 20) return "Ausgeglichen"; if (a < 80) return `Leichter Vorteil ${s}`; if (a < 200) return `Klarer Vorteil ${s}`; if (a < 500) return `Großer Vorteil ${s}`; return `Gewinnend für ${s}` }
+
+// ═══════════════════════════════════════════════════════
+// MultiPV eval — checks how many moves hold the advantage
+// Returns { isOnlyGoodMove: bool, bestMoveUCI: string }
+// ═══════════════════════════════════════════════════════
+function sfEvalMultiPV(fen, depth, numPV) {
+    return new Promise(resolve => {
+        const stm = fen.split(" ")[1];
+        const results = []; // Array of { cp, mate, move }
+        let resolved = false;
+        function done() {
+            if (resolved) return;
+            resolved = true;
+            resolve(results);
+        }
+        const timeout = setTimeout(done, 15000);
+        const origHandler = stockfish.onmessage;
+        stockfish.onmessage = e => {
+            const msg = e.data;
+            if (msg.startsWith("info") && msg.includes("multipv") && msg.includes("score") && msg.includes("pv")) {
+                const pvIdxM = msg.match(/multipv (\d+)/);
+                const cpM = msg.match(/score cp (-?\d+)/);
+                const mM = msg.match(/score mate (-?\d+)/);
+                const pvM = msg.match(/ pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
+                if (!pvIdxM || !pvM) return;
+                const pvIdx = parseInt(pvIdxM[1]) - 1;
+                let cp = 0, mate = null;
+                if (mM) { mate = parseInt(mM[1]); cp = stm === "b" ? (mate > 0 ? -10000 : 10000) : (mate > 0 ? 10000 : -10000); }
+                else if (cpM) { const rc = parseInt(cpM[1]); cp = stm === "b" ? -rc : rc; }
+                results[pvIdx] = { cp, mate, move: pvM[1] };
+            }
+            if (msg.startsWith("bestmove")) {
+                clearTimeout(timeout);
+                done();
+            }
+        };
+        stockfish.postMessage("setoption name MultiPV value " + numPV);
+        stockfish.postMessage("position fen " + fen);
+        stockfish.postMessage("go depth " + depth);
+    });
+}
 
 // ═══════════════════════════════════════════════════════
 // BOARD DOM BUILDER
@@ -467,6 +593,10 @@ function aLiveEvalFree() {
     const preFen = generateFEN(lastFm.preGrid, preTurn, lastFm.preMoveStack);
     aUpdateEvalUI(null, true);
     stockfish.postMessage("stop");
+
+    // Reset MultiPV to 1 for live eval
+    stockfish.postMessage("setoption name MultiPV value 1");
+
     sfEval(preFen, { movetime: liveTimeMs }).then(prevEv => {
         if (freeGrid === null) return;
         const postTurn = positions[curPos].turn + freeMoves.length;
@@ -474,11 +604,16 @@ function aLiveEvalFree() {
         sfEval(postFen, { movetime: liveTimeMs }).then(ev => {
             if (freeGrid === null) return;
             freeEvals[freeMoves.length - 1] = ev;
-            // delta = cp lost by mover (positive = bad for mover)
             const delta = movedColor === "white" ? (prevEv.cp - ev.cp) : (ev.cp - prevEv.cp);
             const lf = freeMoves[freeMoves.length - 1];
             const sacrificed = isSacrifice(lf.preGrid, lf.fromCol, lf.fromRow, lf.toCol, lf.toRow, lf.piece, lf.preMoveStack);
-            const cl = classifyMove(delta, sacrificed, prevEv, ev, movedColor);
+
+            // Determine played move UCI
+            const playedUCI = FILES_STR[lf.fromCol] + (8 - lf.fromRow) + FILES_STR[lf.toCol] + (8 - lf.toRow);
+            const engineBestUCI = prevEv.bestMove || null;
+
+            // For live eval, we skip the "only good move" check (too expensive)
+            const cl = classifyMove(delta, sacrificed, prevEv, ev, movedColor, playedUCI, engineBestUCI, false);
             freeClassifications[freeMoves.length - 1] = cl;
             document.querySelectorAll(".move-badge").forEach(e => e.remove());
             const sq = aSquares[idx(lf.toCol, lf.toRow)];
@@ -567,7 +702,11 @@ function renderMoveList(nodes, container, startTurn, isVariation) {
         token.textContent = node.san + (node.annotation || "");
         if (!isVariation && classifications[moveIdx]) {
             const cl = classifications[moveIdx]; const b = document.createElement("span"); b.className = "move-badge-inline"; b.textContent = cl.sym;
-            b.style.color = { brilliant: "#1baca6", best: "#6bab40", great: "#5c8bb0", good: "#97b162", excellent: "#a8c060", inaccuracy: "#f0c45a", mistake: "#e07c2a", blunder: "#cc3232" }[cl.key] || "";
+            b.style.color = {
+                brilliant: "#1baca6", best: "#6bab40", great: "#5c8bb0",
+                good: "#97b162", excellent: "#a8c060", inaccuracy: "#f0c45a",
+                mistake: "#e07c2a", blunder: "#cc3232", missed: "#b07ad0"
+            }[cl.key] || "";
             token.appendChild(b);
         }
         if (!isVariation) {
@@ -583,7 +722,15 @@ function renderMoveList(nodes, container, startTurn, isVariation) {
                 if (vt % 2 === 0 || vRow === null) { vRow = document.createElement("div"); vRow.className = "move-row"; const vn = document.createElement("span"); vn.className = "move-num"; vn.textContent = (Math.floor(vt / 2) + 1) + "."; vRow.appendChild(vn); vb.appendChild(vRow) }
                 const vTok = document.createElement("span"); vTok.className = "move-token variation"; vTok.textContent = fm.san;
                 const vcl = freeClassifications[vi];
-                if (vcl) { const b = document.createElement("span"); b.className = "move-badge-inline"; b.textContent = vcl.sym; b.style.color = { brilliant: "#1baca6", best: "#6bab40", great: "#5c8bb0", good: "#97b162", excellent: "#a8c060", inaccuracy: "#f0c45a", mistake: "#e07c2a", blunder: "#cc3232" }[vcl.key] || ""; vTok.appendChild(b) }
+                if (vcl) {
+                    const b = document.createElement("span"); b.className = "move-badge-inline"; b.textContent = vcl.sym;
+                    b.style.color = {
+                        brilliant: "#1baca6", best: "#6bab40", great: "#5c8bb0",
+                        good: "#97b162", excellent: "#a8c060", inaccuracy: "#f0c45a",
+                        mistake: "#e07c2a", blunder: "#cc3232", missed: "#b07ad0"
+                    }[vcl.key] || "";
+                    vTok.appendChild(b);
+                }
                 vRow.appendChild(vTok); vt++;
             });
             container.appendChild(vb); currentRow = null;
@@ -592,33 +739,86 @@ function renderMoveList(nodes, container, startTurn, isVariation) {
     }
 }
 
+// ═══════════════════════════════════════════════════════
+// PRE-ANALYSIS with MultiPV for Great / Missed Chance detection
+// ═══════════════════════════════════════════════════════
 async function aPreAnalyseAll() {
     const total = positions.length;
     const bar = document.getElementById("loadingBar"), sub = document.getElementById("loadingSub");
-    evals = new Array(total).fill(null); classifications = new Array(total).fill(null);
+    evals = new Array(total).fill(null);
+    classifications = new Array(total).fill(null);
+
+    // Storage for MultiPV results (only needed per position)
+    const multiPVResults = new Array(total).fill(null);
+
     await waitReady();
+
     for (let i = 0; i < total; i++) {
         bar.style.width = Math.round((i / total) * 100) + "%";
         sub.textContent = i === 0 ? "Startstellung…" : "Zug " + Math.ceil(i / 2) + " wird bewertet…";
         stockfish.postMessage("stop");
         await new Promise(r => setTimeout(r, 20));
+
         const pos = positions[i];
         const fen = generateFEN(pos.grid, pos.turn, pos.moveStack || []);
+
+        // Standard single-PV eval
+        stockfish.postMessage("setoption name MultiPV value 1");
         evals[i] = await sfEval(fen, { depth: PREANALYSIS_DEPTH });
+
+        // For classifying the PREVIOUS move, we need MultiPV on the pre-move position
+        // We store it and use it when classifying
         if (i > 0) {
             const prev = evals[i - 1], curr = evals[i];
             const prevPos = positions[i - 1];
             const move = positions[i].moveStack?.[positions[i].moveStack.length - 1];
-            if (prev && curr) {
+
+            if (prev && curr && move) {
                 const movedColor = (i - 1) % 2 === 0 ? "white" : "black";
                 // delta = cp lost by mover (positive = bad)
                 const delta = movedColor === "white" ? (prev.cp - curr.cp) : (curr.cp - prev.cp);
+
+                // Check sacrifice
                 let sacrificed = false;
-                if (move && prevPos) sacrificed = isSacrifice(prevPos.grid, move.fromCol, move.fromRow, move.toCol, move.toRow, move.movingPiece, prevPos.moveStack || []);
-                classifications[i] = classifyMove(delta, sacrificed, prev, curr, movedColor);
+                if (prevPos) sacrificed = isSacrifice(prevPos.grid, move.fromCol, move.fromRow, move.toCol, move.toRow, move.movingPiece, prevPos.moveStack || []);
+
+                // Determine played move UCI string
+                const playedUCI = FILES_STR[move.fromCol] + (8 - move.fromRow) + FILES_STR[move.toCol] + (8 - move.toRow);
+                const engineBestUCI = prev.bestMove || null;
+
+                // Check if this was the only good move (Great / Missed Chance detection)
+                // We do a MultiPV=3 eval on the pre-move position
+                let isOnlyGoodMove = false;
+                if (delta <= 100 || (engineBestUCI && playedUCI.slice(0, 4) !== engineBestUCI.slice(0, 4))) {
+                    // Only run expensive MultiPV check if it could matter
+                    const prevFen = generateFEN(prevPos.grid, prevPos.turn, prevPos.moveStack || []);
+                    stockfish.postMessage("stop");
+                    await new Promise(r => setTimeout(r, 10));
+                    const mpvRes = await sfEvalMultiPV(prevFen, 15, 3);
+                    // Reset to single PV
+                    stockfish.postMessage("setoption name MultiPV value 1");
+
+                    if (mpvRes && mpvRes.length >= 2) {
+                        const prevForMover = movedColor === "white" ? prev.cp : -prev.cp;
+                        const bestCp = mpvRes[0] ? (movedColor === "white" ? mpvRes[0].cp : -mpvRes[0].cp) : 0;
+                        const secondCp = mpvRes[1] ? (movedColor === "white" ? mpvRes[1].cp : -mpvRes[1].cp) : -9999;
+
+                        // "Only good move": the 2nd best move is significantly worse (100+ cp gap)
+                        // AND the best move holds a significant advantage
+                        if (bestCp - secondCp >= 100 && bestCp >= 50) {
+                            isOnlyGoodMove = true;
+                        }
+                    } else if (mpvRes && mpvRes.length === 1) {
+                        // Only one legal move — automatically "only good move"
+                        isOnlyGoodMove = true;
+                    }
+                }
+
+                classifications[i] = classifyMove(delta, sacrificed, prev, curr, movedColor, playedUCI, engineBestUCI, isOnlyGoodMove);
             }
         }
     }
+
     bar.style.width = "100%"; sub.textContent = "Fertig!";
     await new Promise(r => setTimeout(r, 400));
 }
