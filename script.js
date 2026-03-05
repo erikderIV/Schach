@@ -129,6 +129,9 @@ function sfOnMessage(e) {
 }
 
 function initStockfish() {
+    // Worker bereits bereit — nichts tun
+    if (stockfish && sfReady) return Promise.resolve();
+
     return new Promise((resolve, reject) => {
         if (stockfish) sfTerminate();
         stockfish = new Worker("stockfish-18.js");
@@ -139,7 +142,7 @@ function initStockfish() {
             rej("worker error");
         };
         stockfish.onmessage = sfOnMessage; // set once, never overwritten
-        const timeout = setTimeout(() => { console.error("Stockfish init timeout"); sfTerminate(); reject("init timeout"); }, 100000);
+        const timeout = setTimeout(() => { console.error("Stockfish init timeout"); sfTerminate(); reject("init timeout"); }, 60000);
         sfPending = { type: "init", resolve, reject, timeout };
         stockfish.postMessage("uci");
         // isready wird erst nach uciok geschickt (siehe sfOnMessage)
