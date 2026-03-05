@@ -67,6 +67,14 @@ function sfTerminate() {
 function sfOnMessage(e) {
     const msg = e.data;
 
+    // uciok → send setoptions then isready
+    if (!sfReady && msg === "uciok") {
+        stockfish.postMessage("setoption name Hash value 128");
+        stockfish.postMessage("setoption name MultiPV value 1");
+        stockfish.postMessage("isready");
+        return;
+    }
+
     // readyok during init phase
     if (!sfReady && msg === "readyok") {
         sfReady = true;
@@ -134,11 +142,7 @@ function initStockfish() {
         const timeout = setTimeout(() => { console.error("Stockfish init timeout"); sfTerminate(); reject("init timeout"); }, 10000);
         sfPending = { type: "init", resolve, reject, timeout };
         stockfish.postMessage("uci");
-        stockfish.postMessage("setoption name Hash value 128");
-        stockfish.postMessage("setoption name EvalFile value <empty>");
-        stockfish.postMessage("setoption name EvalFileSmall value <empty>");
-        stockfish.postMessage("setoption name MultiPV value 1");
-        stockfish.postMessage("isready");
+        // isready wird erst nach uciok geschickt (siehe sfOnMessage)
     });
 }
 
