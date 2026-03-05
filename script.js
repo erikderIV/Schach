@@ -69,34 +69,50 @@ let sfCurrentReject = null;
 const PREANALYSIS_DEPTH = 18;
 let liveTimeMs = 3000;
 
+function sfTerminate() {
+    if (stockfish) {
+        try { stockfish.terminate(); } catch (e) { }
+        stockfish = null;
+    }
+    sfReady = false;
+    sfBusy = false;
+    if (sfCurrentReject) { sfCurrentReject("terminated"); sfCurrentReject = null; }
+}
+
 function initStockfish() {
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
+        // Terminate any existing worker before creating a new one
         if (stockfish) {
-            // Soft reset — no terminate()
-            sfReady = false;
-            sfBusy = false;
-            if (sfCurrentReject) { sfCurrentReject("reset"); sfCurrentReject = null; }
-            stockfish.onmessage = e => {
-                if (e.data === "readyok") { sfReady = true; resolve(); }
-            };
-            stockfish.postMessage("stop");
-            stockfish.postMessage("ucinewgame");
-            stockfish.postMessage("setoption name Hash value 128");
-            stockfish.postMessage("setoption name MultiPV value 1");
-            stockfish.postMessage("isready");
-            return;
+            sfTerminate();
         }
-        // First init
+
+        let resolved = false;
+        const initTimeout = setTimeout(() => {
+            if (!resolved) {
+                console.error("Stockfish init timeout — terminating");
+                sfTerminate();
+                reject("init timeout");
+            }
+        }, 10000);
+
         stockfish = new Worker("stockfish-18-lite-single.js");
+
         stockfish.onerror = err => {
             console.error("Stockfish worker error:", err);
-            sfReady = false;
-            sfBusy = false;
-            if (sfCurrentReject) { sfCurrentReject("worker error"); sfCurrentReject = null; }
+            clearTimeout(initTimeout);
+            sfTerminate();
+            if (!resolved) { resolved = true; reject("worker error"); }
         };
+
         stockfish.onmessage = e => {
-            if (e.data === "readyok") { sfReady = true; resolve(); }
+            if (e.data === "readyok") {
+                clearTimeout(initTimeout);
+                sfReady = true;
+                resolved = true;
+                resolve();
+            }
         };
+
         stockfish.postMessage("uci");
         stockfish.postMessage("setoption name Hash value 128");
         stockfish.postMessage("setoption name MultiPV value 1");
@@ -105,9 +121,18 @@ function initStockfish() {
 }
 
 // Central gatekeeper — ensures only one search runs at a time
+// Auto-restarts the worker if it crashed
 function sfRun(fn) {
-    return new Promise((resolve, reject) => {
-        if (!sfReady) { reject("Stockfish not ready"); return; }
+    return new Promise(async (resolve, reject) => {
+        if (!sfReady || !stockfish) {
+            try {
+                console.warn("Stockfish not ready — restarting worker...");
+                await initStockfish();
+            } catch (e) {
+                reject("Stockfish restart failed: " + e);
+                return;
+            }
+        }
         if (sfBusy) {
             stockfish.postMessage("stop");
             if (sfCurrentReject) { sfCurrentReject("cancelled"); sfCurrentReject = null; }
