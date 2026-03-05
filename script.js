@@ -139,7 +139,7 @@ function initStockfish() {
             rej("worker error");
         };
         stockfish.onmessage = sfOnMessage; // set once, never overwritten
-        const timeout = setTimeout(() => { console.error("Stockfish init timeout"); sfTerminate(); reject("init timeout"); }, 60000);
+        const timeout = setTimeout(() => { console.error("Stockfish init timeout"); sfTerminate(); reject("init timeout"); }, 100000);
         sfPending = { type: "init", resolve, reject, timeout };
         stockfish.postMessage("uci");
         // isready wird erst nach uciok geschickt (siehe sfOnMessage)
