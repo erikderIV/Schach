@@ -66,12 +66,12 @@ let sfReady = false;
 let sfBusy = false;
 let sfCurrentReject = null;
 
-const PREANALYSIS_DEPTH = 12;
+const PREANALYSIS_MOVETIME = 5000; // 5 Sekunden pro Zug
 let liveTimeMs = 3000;
 
 function sfTerminate() {
     if (stockfish) {
-        try { stockfish.terminate(); } catch (e) { }
+        try { stockfish.terminate(); } catch (e) {}
         stockfish = null;
     }
     sfReady = false;
@@ -162,15 +162,15 @@ function sfEval(fen, { depth = null, movetime = null } = {}) {
             }
             if (msg.startsWith("info") && msg.includes("score") && msg.includes(" pv ")) {
                 const cpM = msg.match(/score cp (-?\d+)/);
-                const mM = msg.match(/score mate (-?\d+)/);
+                const mM  = msg.match(/score mate (-?\d+)/);
                 const pvM = msg.match(/ pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
                 if (pvM) best.bestMove = pvM[1];
                 if (mM) {
                     const mv = parseInt(mM[1]);
                     best.mate = stm === "b" ? -mv : mv;
-                    best.cp = best.mate > 0 ? 10000 : -10000;
+                    best.cp   = best.mate > 0 ? 10000 : -10000;
                 } else if (cpM) {
-                    best.cp = stm === "b" ? -parseInt(cpM[1]) : parseInt(cpM[1]);
+                    best.cp   = stm === "b" ? -parseInt(cpM[1]) : parseInt(cpM[1]);
                     best.mate = null;
                 }
             }
@@ -188,30 +188,31 @@ function sfEval(fen, { depth = null, movetime = null } = {}) {
     });
 }
 
-function sfEvalMultiPV(fen, depth, numPV) {
+function sfEvalMultiPV(fen, movetime, numPV, useMovetime = false) {
     return sfRun((resolve) => {
         const stm = fen.split(" ")[1];
         const results = [];
-        const timeout = setTimeout(() => resolve(results), 15000);
+        const safetyMs = (useMovetime ? movetime : 15000) + 3000;
+        const timeout = setTimeout(() => resolve(results), safetyMs);
 
         stockfish.onmessage = e => {
             const msg = e.data;
             if (msg === "readyok") {
                 stockfish.postMessage("position fen " + fen);
-                stockfish.postMessage("go depth " + depth);
+                stockfish.postMessage(useMovetime ? "go movetime " + movetime : "go depth " + movetime);
                 return;
             }
             if (msg.startsWith("info") && msg.includes("multipv") && msg.includes(" pv ")) {
                 const pvIdxM = msg.match(/multipv (\d+)/);
-                const cpM = msg.match(/score cp (-?\d+)/);
-                const mM = msg.match(/score mate (-?\d+)/);
-                const pvM = msg.match(/ pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
+                const cpM    = msg.match(/score cp (-?\d+)/);
+                const mM     = msg.match(/score mate (-?\d+)/);
+                const pvM    = msg.match(/ pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
                 if (!pvIdxM || !pvM) return;
                 const pvIdx = parseInt(pvIdxM[1]) - 1;
                 let cp = 0, mate = null;
                 if (mM) {
                     mate = parseInt(mM[1]);
-                    cp = stm === "b" ? (mate > 0 ? -10000 : 10000) : (mate > 0 ? 10000 : -10000);
+                    cp   = stm === "b" ? (mate > 0 ? -10000 : 10000) : (mate > 0 ? 10000 : -10000);
                 } else if (cpM) {
                     cp = stm === "b" ? -parseInt(cpM[1]) : parseInt(cpM[1]);
                 }
@@ -232,9 +233,9 @@ function sfEvalMultiPV(fen, depth, numPV) {
 function getBotMove(fen, elo) {
     return sfRun((resolve) => {
         let bestMove = null;
-        const skill = Math.min(20, Math.max(0, Math.round((elo - 400) / 90)));
+        const skill    = Math.min(20, Math.max(0, Math.round((elo - 400) / 90)));
         const moveTime = Math.min(2000, Math.max(100, elo / 2));
-        const timeout = setTimeout(() => resolve(bestMove), moveTime + 4000);
+        const timeout  = setTimeout(() => resolve(bestMove), moveTime + 4000);
 
         stockfish.onmessage = e => {
             const msg = e.data;
@@ -878,7 +879,7 @@ async function aPreAnalyseAll() {
 
         const pos = positions[i];
         const fen = generateFEN(pos.grid, pos.turn, pos.moveStack || []);
-        evals[i] = await sfEval(fen, { depth: PREANALYSIS_DEPTH });
+        evals[i] = await sfEval(fen, { movetime: PREANALYSIS_MOVETIME });
 
         if (i > 0) {
             const prev = evals[i - 1], curr = evals[i];
@@ -898,10 +899,10 @@ async function aPreAnalyseAll() {
                 let isOnlyGoodMove = false;
                 if (delta <= 100 || (engineBestUCI && playedUCI.slice(0, 4) !== engineBestUCI.slice(0, 4))) {
                     const prevFen = generateFEN(prevPos.grid, prevPos.turn, prevPos.moveStack || []);
-                    const mpvRes = await sfEvalMultiPV(prevFen, 15, 3);
+                    const mpvRes = await sfEvalMultiPV(prevFen, PREANALYSIS_MOVETIME, 3, true);
 
                     if (mpvRes && mpvRes.length >= 2) {
-                        const bestCp = mpvRes[0] ? (movedColor === "white" ? mpvRes[0].cp : -mpvRes[0].cp) : 0;
+                        const bestCp  = mpvRes[0] ? (movedColor === "white" ? mpvRes[0].cp : -mpvRes[0].cp) : 0;
                         const secondCp = mpvRes[1] ? (movedColor === "white" ? mpvRes[1].cp : -mpvRes[1].cp) : -9999;
                         if (bestCp - secondCp >= 100 && bestCp >= 50) isOnlyGoodMove = true;
                     } else if (mpvRes && mpvRes.length === 1) {
