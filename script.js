@@ -879,7 +879,7 @@ async function aPreAnalyseAll() {
 
         const pos = positions[i];
         const fen = generateFEN(pos.grid, pos.turn, pos.moveStack || []);
-        evals[i] = await sfEval(fen, { movetime: PREANALYSIS_MOVETIME });
+        evals[i] = await sfEval(fen, { depth: 20 });
 
         if (i > 0) {
             const prev = evals[i - 1], curr = evals[i];
