@@ -66,7 +66,7 @@ let sfReady = false;
 let sfBusy = false;
 let sfCurrentReject = null;
 
-const PREANALYSIS_DEPTH = 18;
+const PREANALYSIS_DEPTH = 12;
 let liveTimeMs = 3000;
 
 function sfTerminate() {
@@ -95,7 +95,7 @@ function initStockfish() {
             }
         }, 10000);
 
-        stockfish = new Worker("stockfish-18-lite-single.js");
+        stockfish = new Worker("https://cdn.jsdelivr.net/npm/stockfish-web@0.14.0/src/stockfish-nnue-16-single.js");
 
         stockfish.onerror = err => {
             console.error("Stockfish worker error:", err);
