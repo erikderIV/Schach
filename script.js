@@ -1,4 +1,3 @@
-
 // ═══════════════════════════════════════════════════════
 // CHESS ENGINE
 // ═══════════════════════════════════════════════════════
@@ -32,11 +31,10 @@ function generateFEN(g, turn, ms) { let fen = ""; for (let row = 0; row < 8; row
 
 // Build SAN
 function buildSAN(g, fc, fr, tc, tr, piece, ms) {
-    if (piece.type === "king" && fc + 2 === tc) return "O-O"; if (piece.type === "king" && fc - 2 === tc) return "O-O-O"; const letters = { knight: "N", bishop: "B", rook: "R", queen: "Q", king: "K", pawn: "" }; const cap = g[idx(tc, tr)] !== null; const toAlg = squareToAlg(tc, tr); if (piece.type === "pawn") return cap ? FILES_STR[fc] + "x" + toAlg : toAlg;// disambiguation
+    if (piece.type === "king" && fc + 2 === tc) return "O-O"; if (piece.type === "king" && fc - 2 === tc) return "O-O-O"; const letters = { knight: "N", bishop: "B", rook: "R", queen: "Q", king: "K", pawn: "" }; const cap = g[idx(tc, tr)] !== null; const toAlg = squareToAlg(tc, tr); if (piece.type === "pawn") return cap ? FILES_STR[fc] + "x" + toAlg : toAlg;
     const cands = []; for (let r = 0; r < 8; r++)for (let c = 0; c < 8; c++) { const p = g[idx(c, r)]; if (!p || p.color !== piece.color || p.type !== piece.type) continue; if (legalMoves(g, c, r, p, ms).includes(idx(tc, tr))) cands.push({ c, r }) } let dis = ""; if (cands.length > 1) { const same = cands.filter(x => x.c === fc); if (same.length > 1) dis += (8 - fr); else dis += FILES_STR[fc] } return letters[piece.type] + dis + (cap ? "x" : "") + toAlg
 }
 
-// Check/mate suffix
 function getSuffix(g, turn, ms) { const color = turn % 2 === 0 ? "white" : "black"; const inCk = isInCheck(g, color, ms); if (!inCk) return ""; return hasAnyLegal(g, color, ms) ? "+" : "#" }
 
 // ═══════════════════════════════════════════════════════
@@ -68,17 +66,89 @@ function sfEval(fen, { depth = null, movetime = null } = {}) { return new Promis
 // Bot move with given elo
 function getBotMove(fen, elo) {
     return new Promise(resolve => {
-        const stm = fen.split(" ")[1]; let bestMove = null; let resolved = false; function done() { if (resolved) return; resolved = true; resolve(bestMove) } const timeout = setTimeout(done, 8000);// Skill level 0-20 based on elo
-        const skill = Math.min(20, Math.max(0, Math.round((elo - 400) / 90))); const moveTime = Math.min(2000, Math.max(100, elo / 2)); stockfish.onmessage = e => { const msg = e.data; if (msg === "uciok" || msg === "readyok") return; if (msg.startsWith("bestmove")) { const parts = msg.split(" "); if (parts[1] && parts[1] !== "(none)") bestMove = parts[1]; clearTimeout(timeout); done() } }; stockfish.postMessage("setoption name Skill Level value " + skill); stockfish.postMessage("position fen " + fen); stockfish.postMessage("go movetime " + moveTime)
+        const stm = fen.split(" ")[1]; let bestMove = null; let resolved = false;
+        function done() { if (resolved) return; resolved = true; resolve(bestMove) }
+        const timeout = setTimeout(done, 8000);
+        const skill = Math.min(20, Math.max(0, Math.round((elo - 400) / 90)));
+        const moveTime = Math.min(2000, Math.max(100, elo / 2));
+        stockfish.onmessage = e => {
+            const msg = e.data;
+            if (msg === "uciok" || msg === "readyok") return;
+            if (msg.startsWith("bestmove")) {
+                const parts = msg.split(" ");
+                if (parts[1] && parts[1] !== "(none)") bestMove = parts[1];
+                clearTimeout(timeout); done()
+            }
+        };
+        stockfish.postMessage("setoption name Skill Level value " + skill);
+        stockfish.postMessage("position fen " + fen);
+        stockfish.postMessage("go movetime " + moveTime)
     })
 }
 
 // ═══════════════════════════════════════════════════════
 // CLASSIFICATION
+// Brilliant:   Aufopferung eines Stückes ohne Vorteil zu verlieren (delta <= 50cp)
+// Great Move:  Einziger Zug der den Vorteil beibehält (delta <= 10cp, sehr gut)
+// Best Move:   Bester Engine-Zug (delta <= 5cp)
+// Excellent:   Keine Verschlechterung um mehr als 10cp
+// Good:        Keine höhere Abweichung als 25cp
+// Inaccuracy:  Abweichung > 25cp, aber kein Verlust des entscheidenden Vorteils
+// Mistake:     Zug kostet klar Vorteil, aber nicht das Spiel (von +100 auf ~0)
+// Blunder:     Zug hat das Spiel gekostet (von Vorteil auf -100 oder schlechter)
 // ═══════════════════════════════════════════════════════
-function isSacrifice(g, fc, fr, tc, tr, piece, ms) { const cap = g[idx(tc, tr)]; const capVal = cap ? PIECE_VALUES[cap.type] : 0; if (PIECE_VALUES[piece.type] <= capVal) return false; return sqAttacked(g, tc, tr, piece.color === "white" ? "black" : "white", ms) }
+function isSacrifice(g, fc, fr, tc, tr, piece, ms) {
+    const cap = g[idx(tc, tr)];
+    const capVal = cap ? PIECE_VALUES[cap.type] : 0;
+    if (PIECE_VALUES[piece.type] <= capVal) return false;
+    // Moving into an attacked square without equal/better recapture
+    return sqAttacked(g, tc, tr, piece.color === "white" ? "black" : "white", ms)
+}
 
-function classifyMove(delta, sacrificed, prevEv, currEv, movedColor) { if (currEv && currEv.mate !== null) { const good = movedColor === "white" ? currEv.mate > 0 : currEv.mate < 0; if (good) return { key: "best", sym: "★", label: "Bester Zug (Matt!)", css: "badge-best" } } if (prevEv && prevEv.mate !== null) { const wasBad = movedColor === "white" ? prevEv.mate < 0 : prevEv.mate > 0; if (wasBad && delta < 500) return { key: "good", sym: "✓", label: "Gut", css: "badge-good" } } if (sacrificed && delta <= 20) return { key: "brilliant", sym: "!!", label: "Brillant", css: "badge-brilliant" }; if (delta <= 5) return { key: "best", sym: "★", label: "Bester Zug", css: "badge-best" }; if (delta <= 15) return { key: "great", sym: "!", label: "Großartig", css: "badge-great" }; if (delta <= 35) return { key: "good", sym: "✓", label: "Gut", css: "badge-good" }; if (delta <= 100) return { key: "inaccuracy", sym: "?!", label: "Ungenauigkeit", css: "badge-inaccuracy" }; if (delta <= 300) return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" }; return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" } }
+function classifyMove(delta, sacrificed, prevEv, currEv, movedColor) {
+    // delta = how much cp the MOVER lost (positive = bad for mover)
+    // Always from mover's perspective
+
+    // Checkmate delivered → best possible
+    if (currEv && currEv.mate !== null) {
+        const good = movedColor === "white" ? currEv.mate > 0 : currEv.mate < 0;
+        if (good) return { key: "best", sym: "★", label: "Bester Zug (Matt!)", css: "badge-best" }
+    }
+
+    // Was previously facing forced mate, any escape is "good"
+    if (prevEv && prevEv.mate !== null) {
+        const wasBad = movedColor === "white" ? prevEv.mate < 0 : prevEv.mate > 0;
+        if (wasBad && delta < 100) return { key: "good", sym: "✓", label: "Gut", css: "badge-good" }
+    }
+
+    // Brilliant: sacrifice without losing the advantage
+    if (sacrificed && delta <= 50) return { key: "brilliant", sym: "!!", label: "Brillant", css: "badge-brilliant" };
+
+    // Classify by cp loss (delta = cp lost by mover)
+    if (delta <= 5) return { key: "best", sym: "★", label: "Bester Zug", css: "badge-best" };
+    if (delta <= 10) return { key: "great", sym: "!", label: "Großartig", css: "badge-great" };
+    if (delta <= 25) return { key: "excellent", sym: "✓", label: "Ausgezeichnet", css: "badge-excellent" };
+    if (delta <= 100) return { key: "good", sym: "·", label: "Gut", css: "badge-good" };
+
+    // Stronger losses — check position context
+    // prevEv.cp from white's perspective, convert to mover's perspective
+    const prevForMover = movedColor === "white" ? prevEv.cp : -prevEv.cp;
+    const currForMover = movedColor === "white" ? currEv.cp : -currEv.cp;
+
+    // Inaccuracy: lost some advantage but still not losing
+    if (delta <= 250 && currForMover > -50) return { key: "inaccuracy", sym: "?!", label: "Ungenauigkeit", css: "badge-inaccuracy" };
+
+    // Blunder: was winning (+100), now losing (-100) or worse
+    if (prevForMover >= 100 && currForMover <= -100) return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
+
+    // Mistake: was winning, now roughly equal or slightly worse
+    if (prevForMover >= 100 && currForMover <= 50) return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" };
+
+    // Large loss but wasn't winning before → inaccuracy/mistake
+    if (delta <= 300) return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" };
+
+    return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" }
+}
 
 function evalToLabel(cp) { const a = Math.abs(cp), s = cp >= 0 ? "Weiß" : "Schwarz"; if (a < 20) return "Ausgeglichen"; if (a < 80) return `Leichter Vorteil ${s}`; if (a < 200) return `Klarer Vorteil ${s}`; if (a < 500) return `Großer Vorteil ${s}`; return `Gewinnend für ${s}` }
 
@@ -104,7 +174,7 @@ function showCheckHl(g, turn, squares) { const color = turn % 2 === 0 ? "white" 
 // ═══════════════════════════════════════════════════════
 // LOADING MINI BOARD
 // ═══════════════════════════════════════════════════════
-(() => { const mini = document.getElementById("loadingMini"); for (let r = 0; r < 8; r++)for (let c = 0; c < 8; c++) { const d = document.createElement("div"); d.className = (r + c) % 2 === 0 ? "l" : "d"; mini.appendChild(d) } })();
+(() => { const mini = document.getElementById("loadingMini"); if (!mini) return; for (let r = 0; r < 8; r++)for (let c = 0; c < 8; c++) { const d = document.createElement("div"); d.className = (r + c) % 2 === 0 ? "l" : "d"; mini.appendChild(d) } })();
 
 // ═══════════════════════════════════════════════════════
 // ── GAME MODE (Bot / Friend) ──
@@ -117,13 +187,13 @@ const gSvg = document.getElementById("gArrowLayer");
 ({ squares: gSquares, pieces: gPieces } = buildBoardDOM(gBoardEl, gRanksEl, gFilesEl));
 
 let gGrid = null, gMoveStack = [], gTurn = 0;
-let gMode = "friend"; // "bot" or "friend"
-let gPlayerColor = "white"; // which color is human in bot mode
+let gMode = "friend";
+let gPlayerColor = "white";
 let gBotElo = 800;
 let gSelectedSq = null;
 let gBotThinking = false;
 let gGameOver = false;
-let gHistory = []; // {san, fromCol,fromRow,toCol,toRow,suffix}
+let gHistory = [];
 
 function gStartGame(mode, playerColor, botElo) {
     gMode = mode; gPlayerColor = playerColor; gBotElo = botElo;
@@ -133,7 +203,16 @@ function gStartGame(mode, playerColor, botElo) {
     gRenderBoard();
     gRenderNotation();
     document.getElementById("gameStatus").textContent = "";
+    // Remove old listeners before adding new ones
+    gSquares.forEach(sq => {
+        const newSq = sq.cloneNode(true);
+        sq.parentNode.replaceChild(newSq, sq);
+    });
+    // Rebuild reference after DOM replacement
+    gSquares = Array.from(gBoardEl.querySelectorAll(".square"));
+    gPieces = gSquares.map(sq => sq.querySelector(".piece"));
     gSquares.forEach(sq => sq.addEventListener("click", gHandleClick));
+    gRenderBoard();
     // If bot plays white, trigger bot move
     if (gMode === "bot" && gPlayerColor === "black") { setTimeout(() => gBotMove(), 300) }
 }
@@ -141,8 +220,9 @@ function gStartGame(mode, playerColor, botElo) {
 function gHandleClick(e) {
     if (gGameOver || gBotThinking) return;
     const col = +e.currentTarget.dataset.col, row = +e.currentTarget.dataset.row;
-    const humanColor = gMode === "friend" ? (gTurn % 2 === 0 ? "white" : "black") : gPlayerColor;
     const turnColor = gTurn % 2 === 0 ? "white" : "black";
+
+    // In bot mode, only allow the human player's color to move
     if (gMode === "bot" && turnColor !== gPlayerColor) return;
 
     if (gSelectedSq === null) {
@@ -185,11 +265,22 @@ function gMakeMove(fc, fr, tc, tr, piece, promoType = "queen") {
     gRenderBoard();
     gRenderNotation();
     gCheckGameOver(suffix);
-    if (!gGameOver && gMode === "bot") { setTimeout(() => gBotMove(), 200) }
+
+    // FIX: Only trigger bot move if game not over AND it's the bot's turn
+    if (!gGameOver && gMode === "bot") {
+        const nextColor = gTurn % 2 === 0 ? "white" : "black";
+        if (nextColor !== gPlayerColor) {
+            setTimeout(() => gBotMove(), 200);
+        }
+    }
 }
 
 async function gBotMove() {
     if (gGameOver) return;
+    // Double-check it's actually the bot's turn
+    const turnColor = gTurn % 2 === 0 ? "white" : "black";
+    if (turnColor === gPlayerColor) return;
+
     gBotThinking = true;
     document.getElementById("gameStatus").textContent = "Bot denkt…";
     const fen = generateFEN(gGrid, gTurn, gMoveStack);
@@ -234,7 +325,6 @@ function gRenderBoard() {
         gSquares[idx(last.toCol, last.toRow)].classList.add("sq-lastmove");
     }
     showCheckHl(gGrid, gTurn, gSquares);
-    // Update player strips
     const wb = gTurn % 2 === 0;
     document.getElementById("gStripBottom").classList.toggle("active", wb);
     document.getElementById("gStripTop").classList.toggle("active", !wb);
@@ -253,7 +343,6 @@ function gRenderNotation() {
 
 function gUndoMove() {
     if (gGameOver || gBotThinking || gHistory.length === 0) return;
-    // In bot mode undo 2 moves (bot + player), in friend mode undo 1
     const undoCount = gMode === "bot" ? Math.min(2, gHistory.length) : 1;
     for (let i = 0; i < undoCount; i++) { if (gHistory.length > 0) { undoMoveFromStack(gGrid, gMoveStack); gHistory.pop(); gTurn-- } }
     gRenderBoard(); gRenderNotation();
@@ -264,12 +353,10 @@ function gUndoMove() {
     gSquares.forEach(sq => sq.addEventListener("click", gHandleClick));
 }
 
-// Convert game history to PGN for analysis
 function gGameToPGN() {
     let pgn = `[White "${document.getElementById("gNameBottom").textContent}"]\n`;
     pgn += `[Black "${document.getElementById("gNameTop").textContent}"]\n`;
     pgn += `[Result "*"]\n\n`;
-    let i = 0;
     gHistory.forEach((h, n) => { if (n % 2 === 0) pgn += (Math.floor(n / 2) + 1) + ". "; pgn += h.san + " " });
     return pgn.trim();
 }
@@ -290,7 +377,6 @@ let freeGrid = null, freeMoveStack = [], freeMoves = [], freeEvals = [], freeCla
 let aSelectedSq = null;
 let lastKnownEval = null;
 
-// Check if a free move matches the next PGN move
 function matchesNextPGNMove(fc, fr, tc, tr) {
     if (freeGrid !== null || curPos >= positions.length - 1) return false;
     const nextPos = positions[curPos + 1];
@@ -330,14 +416,12 @@ function aHandleClick(e) {
         const moves = legalMoves(curGrid, from.col, from.row, from.piece, ms);
         if (!moves.includes(idx(col, row))) { aSelectedSq = null; return }
 
-        // Check if this move matches the next PGN move → advance main line
         if (freeGrid === null && matchesNextPGNMove(from.col, from.row, col, row)) {
             aSelectedSq = null;
             aGoToPosition(curPos + 1);
             return;
         }
 
-        // Otherwise enter/continue free play
         const preGrid = cloneGrid(freeGrid || positions[curPos].grid);
         const preMS = (freeGrid ? freeMoveStack : positions[curPos].moveStack || []).map(m => ({ ...m }));
 
@@ -390,6 +474,7 @@ function aLiveEvalFree() {
         sfEval(postFen, { movetime: liveTimeMs }).then(ev => {
             if (freeGrid === null) return;
             freeEvals[freeMoves.length - 1] = ev;
+            // delta = cp lost by mover (positive = bad for mover)
             const delta = movedColor === "white" ? (prevEv.cp - ev.cp) : (ev.cp - prevEv.cp);
             const lf = freeMoves[freeMoves.length - 1];
             const sacrificed = isSacrifice(lf.preGrid, lf.fromCol, lf.fromRow, lf.toCol, lf.toRow, lf.piece, lf.preMoveStack);
@@ -482,7 +567,7 @@ function renderMoveList(nodes, container, startTurn, isVariation) {
         token.textContent = node.san + (node.annotation || "");
         if (!isVariation && classifications[moveIdx]) {
             const cl = classifications[moveIdx]; const b = document.createElement("span"); b.className = "move-badge-inline"; b.textContent = cl.sym;
-            b.style.color = { brilliant: "#1baca6", best: "#6bab40", great: "#5c8bb0", good: "#97b162", inaccuracy: "#f0c45a", mistake: "#e07c2a", blunder: "#cc3232" }[cl.key] || "";
+            b.style.color = { brilliant: "#1baca6", best: "#6bab40", great: "#5c8bb0", good: "#97b162", excellent: "#a8c060", inaccuracy: "#f0c45a", mistake: "#e07c2a", blunder: "#cc3232" }[cl.key] || "";
             token.appendChild(b);
         }
         if (!isVariation) {
@@ -492,14 +577,13 @@ function renderMoveList(nodes, container, startTurn, isVariation) {
         }
         currentRow.appendChild(token);
         if (node.variations && node.variations.length > 0) { for (const vn of node.variations) { const vb = document.createElement("div"); vb.className = "var-block"; renderMoveList(vn, vb, turn, true); container.appendChild(vb) } currentRow = null }
-        // Free moves after curPos
         if (!isVariation && ni === curPos - 1 && freeMoves.length > 0) {
             const vb = document.createElement("div"); vb.className = "var-block"; let vt = turn + 1, vRow = null;
             freeMoves.forEach((fm, vi) => {
                 if (vt % 2 === 0 || vRow === null) { vRow = document.createElement("div"); vRow.className = "move-row"; const vn = document.createElement("span"); vn.className = "move-num"; vn.textContent = (Math.floor(vt / 2) + 1) + "."; vRow.appendChild(vn); vb.appendChild(vRow) }
                 const vTok = document.createElement("span"); vTok.className = "move-token variation"; vTok.textContent = fm.san;
                 const vcl = freeClassifications[vi];
-                if (vcl) { const b = document.createElement("span"); b.className = "move-badge-inline"; b.textContent = vcl.sym; b.style.color = { brilliant: "#1baca6", best: "#6bab40", great: "#5c8bb0", good: "#97b162", inaccuracy: "#f0c45a", mistake: "#e07c2a", blunder: "#cc3232" }[vcl.key] || ""; vTok.appendChild(b) }
+                if (vcl) { const b = document.createElement("span"); b.className = "move-badge-inline"; b.textContent = vcl.sym; b.style.color = { brilliant: "#1baca6", best: "#6bab40", great: "#5c8bb0", good: "#97b162", excellent: "#a8c060", inaccuracy: "#f0c45a", mistake: "#e07c2a", blunder: "#cc3232" }[vcl.key] || ""; vTok.appendChild(b) }
                 vRow.appendChild(vTok); vt++;
             });
             container.appendChild(vb); currentRow = null;
@@ -527,6 +611,7 @@ async function aPreAnalyseAll() {
             const move = positions[i].moveStack?.[positions[i].moveStack.length - 1];
             if (prev && curr) {
                 const movedColor = (i - 1) % 2 === 0 ? "white" : "black";
+                // delta = cp lost by mover (positive = bad)
                 const delta = movedColor === "white" ? (prev.cp - curr.cp) : (curr.cp - prev.cp);
                 let sacrificed = false;
                 if (move && prevPos) sacrificed = isSacrifice(prevPos.grid, move.fromCol, move.fromRow, move.toCol, move.toRow, move.movingPiece, prevPos.moveStack || []);
@@ -548,7 +633,6 @@ async function aStartAnalysis(pgn, tags, tree) {
     await aPreAnalyseAll();
     document.getElementById("loadingOverlay").classList.remove("show");
     curPos = 0; freeGrid = null; freeMoves = []; freeEvals = []; freeClassifications = []; lastKnownEval = null;
-    // Render game info
     const info = document.getElementById("aGameInfo"); info.innerHTML = "";
     [["White", tags.White], ["Black", tags.Black], ["Event", tags.Event], ["Date", tags.Date], ["Result", tags.Result]].forEach(([k, v]) => { if (!v || v === "?") return; const row = document.createElement("div"); row.className = "info-row"; row.innerHTML = `<span class="info-key">${k}</span><span class="info-val">${v}</span>`; info.appendChild(row) });
     document.getElementById("aNameBottom").textContent = tags.White || "Weiß";
@@ -581,7 +665,6 @@ document.getElementById("modeFriend").addEventListener("click", () => {
     document.getElementById("botSetup").classList.remove("visible");
     document.getElementById("pgnSection").classList.remove("visible");
     document.getElementById("headerTag").textContent = "Gegen Freund";
-    // Start immediately
     initStockfish();
     document.getElementById("gNameBottom").textContent = "Spieler 1";
     document.getElementById("gNameTop").textContent = "Spieler 2";
@@ -596,12 +679,10 @@ document.getElementById("modeAnalyse").addEventListener("click", () => {
     document.getElementById("headerTag").textContent = "PGN Analyse";
 });
 
-// Difficulty pills
 document.querySelectorAll(".diff-pill").forEach(p => p.addEventListener("click", e => {
     document.querySelectorAll(".diff-pill").forEach(x => x.classList.remove("active"));
     e.target.classList.add("active");
 }));
-// Color pills
 document.querySelectorAll(".color-pill").forEach(p => p.addEventListener("click", e => {
     document.querySelectorAll(".color-pill").forEach(x => x.classList.remove("active"));
     e.target.classList.add("active");
@@ -622,7 +703,6 @@ document.getElementById("startBotBtn").addEventListener("click", () => {
     showScreen("gameScreen");
 });
 
-// Sample PGNs
 const SAMPLES = { immortal: `[Event "The Immortal Game"]\n[White "Anderssen"]\n[Black "Kieseritzky"]\n[Date "1851.06.21"]\n[Result "1-0"]\n\n1. e4 e5 2. f4 exf4 3. Bc4 Qh4+ 4. Kf1 b5 5. Bxb5 Nf6 6. Nf3 Qh6 7. d3 Nh5 8. Nh4 Qg5 9. Nf5 c6 10. g4 Nf6 11. Rg1 cxb5 12. h4 Qg6 13. h5 Qg5 14. Qf3 Ng8 15. Bxf4 Qf6 16. Nc3 Bc5 17. Nd5 Qxb2 18. Bd6 Bxg1 19. e5 Qxa1+ 20. Ke2 Na6 21. Nxg7+ Kd8 22. Qf6+ Nxf6 23. Be7# 1-0`, opera: `[Event "Opera Game"]\n[White "Morphy"]\n[Black "Duke of Brunswick"]\n[Date "1858.??.??"]\n[Result "1-0"]\n\n1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7 8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0`, short: `[Event "Quick Game"]\n[White "Scholar"]\n[Black "Victim"]\n[Result "1-0"]\n\n1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0` };
 document.querySelectorAll(".sample-chip").forEach(btn => btn.addEventListener("click", () => { document.getElementById("pgnInput").value = SAMPLES[btn.dataset.pgn] || "" }));
 
@@ -637,7 +717,6 @@ document.getElementById("analyseBtn").addEventListener("click", async () => {
     if (ok) showScreen("analysisScreen");
 });
 
-// ── GAME SCREEN BUTTONS ──
 document.getElementById("gUndoBtn").addEventListener("click", gUndoMove);
 document.getElementById("gHomeBtn").addEventListener("click", () => {
     gSquares.forEach(sq => sq.removeEventListener("click", gHandleClick));
@@ -659,7 +738,6 @@ document.getElementById("btnAnalyseGame").addEventListener("click", async () => 
     if (ok) showScreen("analysisScreen");
 });
 
-// ── ANALYSIS SCREEN BUTTONS ──
 document.getElementById("aBtnFirst").addEventListener("click", () => aGoToPosition(0));
 document.getElementById("aBtnPrev").addEventListener("click", () => {
     if (freeMoves.length > 0) {
@@ -681,7 +759,6 @@ document.getElementById("aBtnHome").addEventListener("click", () => {
 
 document.getElementById("timeSlider").addEventListener("input", e => { liveTimeMs = +e.target.value * 1000; document.getElementById("timeVal").textContent = e.target.value + "s" });
 
-// Keyboard
 document.addEventListener("keydown", e => {
     const as = document.getElementById("analysisScreen");
     if (!as.classList.contains("active")) return;
@@ -693,5 +770,4 @@ document.addEventListener("keydown", e => {
     if (e.key === "Escape" && freeGrid !== null) aExitFreePlay();
 });
 
-// Init
 showScreen("homeScreen");
