@@ -13,22 +13,15 @@ function inB(c, r) { return c >= 0 && c < 8 && r >= 0 && r < 8 }
 function freshBoard() { const g = Array(64).fill(null); BACK_RANK.forEach((t, c) => { g[idx(c, 0)] = createPiece(t, "black"); g[idx(c, 7)] = createPiece(t, "white") }); for (let c = 0; c < 8; c++) { g[idx(c, 1)] = createPiece("pawn", "black"); g[idx(c, 6)] = createPiece("pawn", "white") } return g }
 function cloneGrid(g) { return g.map(p => p ? { ...p } : null) }
 function squareToAlg(col, row) { return FILES_STR[col] + (8 - row) }
-
 function slideMoves(g, col, row, piece, dirs) { const s = new Set(); for (const [dc, dr] of dirs) { for (let i = 1; i < 8; i++) { const nc = col + dc * i, nr = row + dr * i; if (!inB(nc, nr)) break; const t = g[idx(nc, nr)]; if (!t) s.add(idx(nc, nr)); else { if (t.color !== piece.color) s.add(idx(nc, nr)); break } } } return [...s] }
-
 function pseudoLegal(g, col, row, piece, ms) { if (!piece) return []; const s = new Set(); switch (piece.type) { case "pawn": { const dir = piece.color === "white" ? -1 : 1, sr = piece.color === "white" ? 6 : 1; if (inB(col, row + dir) && !g[idx(col, row + dir)]) { s.add(idx(col, row + dir)); if (row === sr && !g[idx(col, row + 2 * dir)]) s.add(idx(col, row + 2 * dir)) } for (const dc of [-1, 1]) { const nc = col + dc, nr = row + dir; if (!inB(nc, nr)) continue; const t = g[idx(nc, nr)]; if (t && t.color !== piece.color) s.add(idx(nc, nr)); const last = ms[ms.length - 1]; if (last && last.movingPiece.type === "pawn" && Math.abs(last.fromRow - last.toRow) === 2 && last.toRow === row && last.toCol === nc) s.add(idx(nc, nr)) } break } case "knight": for (const [dc, dr] of [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]]) { const nc = col + dc, nr = row + dr; if (!inB(nc, nr)) continue; const t = g[idx(nc, nr)]; if (!t || t.color !== piece.color) s.add(idx(nc, nr)) } break; case "bishop": return slideMoves(g, col, row, piece, [[-1, -1], [-1, 1], [1, -1], [1, 1]]); case "rook": return slideMoves(g, col, row, piece, [[-1, 0], [1, 0], [0, -1], [0, 1]]); case "queen": return [...new Set([...slideMoves(g, col, row, piece, [[-1, -1], [-1, 1], [1, -1], [1, 1]]), ...slideMoves(g, col, row, piece, [[-1, 0], [1, 0], [0, -1], [0, 1]])])]; case "king": { const enemy = piece.color === "white" ? "black" : "white"; for (let dx = -1; dx <= 1; dx++)for (let dy = -1; dy <= 1; dy++) { if (dx === 0 && dy === 0) continue; const nc = col + dx, nr = row + dy; if (!inB(nc, nr)) continue; const t = g[idx(nc, nr)]; if (!t || t.color !== piece.color) s.add(idx(nc, nr)) } if (!piece.hasMoved && !isInCheck(g, piece.color, ms)) { if (!g[idx(col + 1, row)] && !g[idx(col + 2, row)] && !sqAttacked(g, col + 1, row, enemy, ms) && !sqAttacked(g, col + 2, row, enemy, ms)) { const r = g[idx(col + 3, row)]; if (r && r.type === "rook" && !r.hasMoved) s.add(idx(col + 2, row)) } if (!g[idx(col - 1, row)] && !g[idx(col - 2, row)] && !g[idx(col - 3, row)] && !sqAttacked(g, col - 1, row, enemy, ms) && !sqAttacked(g, col - 2, row, enemy, ms)) { const r = g[idx(col - 4, row)]; if (r && r.type === "rook" && !r.hasMoved) s.add(idx(col - 2, row)) } } break } } return [...s] }
-
 function sqAttacked(g, col, row, byColor, ms) { for (let r = 0; r < 8; r++)for (let c = 0; c < 8; c++) { const p = g[idx(c, r)]; if (!p || p.color !== byColor) continue; if (p.type === "pawn") { const dir = byColor === "white" ? -1 : 1; if (r + dir === row && (c - 1 === col || c + 1 === col)) return true; continue } if (p.type === "king") { if (Math.abs(c - col) <= 1 && Math.abs(r - row) <= 1 && (c !== col || r !== row)) return true; continue } if (pseudoLegal(g, c, r, p, ms).includes(idx(col, row))) return true } return false }
 function isInCheck(g, color, ms) { for (let r = 0; r < 8; r++)for (let c = 0; c < 8; c++) { const p = g[idx(c, r)]; if (p && p.color === color && p.type === "king") return sqAttacked(g, c, r, color === "white" ? "black" : "white", ms) } return false }
 function legalMoves(g, col, row, piece, ms) { return pseudoLegal(g, col, row, piece, ms).filter(ti => { const g2 = cloneGrid(g); applyMove(g2, col, row, ti % 8, Math.floor(ti / 8), [], false); return !isInCheck(g2, piece.color, ms) }) }
 function hasAnyLegal(g, color, ms) { for (let r = 0; r < 8; r++)for (let c = 0; c < 8; c++) { const p = g[idx(c, r)]; if (p && p.color === color && legalMoves(g, c, r, p, ms).length > 0) return true } return false }
-
 function applyMove(g, fromCol, fromRow, toCol, toRow, stack, push = true) { const fi = idx(fromCol, fromRow), ti = idx(toCol, toRow); const move = { fromCol, fromRow, toCol, toRow, movingPiece: g[fi], capturedPiece: g[ti], special: "", movedBefore: g[fi].hasMoved }; if (move.movingPiece.type === "king") { if (fromCol + 2 === toCol) { g[idx(toCol - 1, toRow)] = g[idx(7, toRow)]; g[idx(7, toRow)] = null; g[idx(toCol - 1, toRow)].hasMoved = true; move.special = "short castle" } if (fromCol - 2 === toCol) { g[idx(toCol + 1, toRow)] = g[idx(0, toRow)]; g[idx(0, toRow)] = null; g[idx(toCol + 1, toRow)].hasMoved = true; move.special = "long castle" } } if (move.movingPiece.type === "pawn" && toCol !== fromCol && !g[ti]) { const dir = move.movingPiece.color === "white" ? 1 : -1; move.capturedPiece = g[idx(toCol, toRow + dir)]; g[idx(toCol, toRow + dir)] = null; move.special = "en passant" } g[fi] = null; g[ti] = { ...move.movingPiece, hasMoved: true }; if (push) stack.push(move); return move }
-
 function undoMoveFromStack(g, stack) { if (!stack.length) return; const m = stack.pop(); const fi = idx(m.fromCol, m.fromRow), ti = idx(m.toCol, m.toRow); g[fi] = { ...m.movingPiece }; g[ti] = m.capturedPiece ? { ...m.capturedPiece } : null; if (m.special === "en passant") { const dir = m.movingPiece.color === "white" ? 1 : -1; g[idx(m.toCol, m.toRow + dir)] = { ...m.capturedPiece }; g[ti] = null } if (m.special === "short castle") { g[idx(7, m.fromRow)] = { ...g[idx(m.toCol - 1, m.fromRow)], hasMoved: false }; g[idx(m.toCol - 1, m.fromRow)] = null } if (m.special === "long castle") { g[idx(0, m.fromRow)] = { ...g[idx(m.toCol + 1, m.fromRow)], hasMoved: false }; g[idx(m.toCol + 1, m.fromRow)] = null } }
-
 function generateFEN(g, turn, ms) { let fen = ""; for (let row = 0; row < 8; row++) { let empty = 0; for (let col = 0; col < 8; col++) { const p = g[idx(col, row)]; if (!p) { empty++; continue } if (empty > 0) { fen += empty; empty = 0 } const l = { pawn: "p", rook: "r", knight: "n", bishop: "b", queen: "q", king: "k" }[p.type]; fen += p.color === "white" ? l.toUpperCase() : l } if (empty > 0) fen += empty; if (row !== 7) fen += "/" } fen += turn % 2 === 0 ? " w " : " b "; let castling = ""; const wk = g[idx(4, 7)], bk = g[idx(4, 0)]; if (wk && wk.type === "king" && !wk.hasMoved) { if (g[idx(7, 7)] && g[idx(7, 7)].type === "rook" && !g[idx(7, 7)].hasMoved) castling += "K"; if (g[idx(0, 7)] && g[idx(0, 7)].type === "rook" && !g[idx(0, 7)].hasMoved) castling += "Q" } if (bk && bk.type === "king" && !bk.hasMoved) { if (g[idx(7, 0)] && g[idx(7, 0)].type === "rook" && !g[idx(7, 0)].hasMoved) castling += "k"; if (g[idx(0, 0)] && g[idx(0, 0)].type === "rook" && !g[idx(0, 0)].hasMoved) castling += "q" } fen += (castling || "-") + " "; let ep = "-"; const last = ms[ms.length - 1]; if (last && last.movingPiece.type === "pawn" && Math.abs(last.fromRow - last.toRow) === 2) { const er = last.movingPiece.color === "white" ? last.toRow + 1 : last.toRow - 1; ep = squareToAlg(last.toCol, er) } fen += ep + " 0 " + (Math.floor(turn / 2) + 1); return fen }
-
 function buildSAN(g, fc, fr, tc, tr, piece, ms) {
     if (piece.type === "king" && fc + 2 === tc) return "O-O";
     if (piece.type === "king" && fc - 2 === tc) return "O-O-O";
@@ -42,221 +35,158 @@ function buildSAN(g, fc, fr, tc, tr, piece, ms) {
     if (cands.length > 1) { const same = cands.filter(x => x.c === fc); if (same.length > 1) dis += (8 - fr); else dis += FILES_STR[fc] }
     return letters[piece.type] + dis + (cap ? "x" : "") + toAlg;
 }
-
 function getSuffix(g, turn, ms) { const color = turn % 2 === 0 ? "white" : "black"; const inCk = isInCheck(g, color, ms); if (!inCk) return ""; return hasAnyLegal(g, color, ms) ? "+" : "#" }
 
 // ═══════════════════════════════════════════════════════
 // PGN PARSER
 // ═══════════════════════════════════════════════════════
 function parsePGN(pgn) { const tags = {}; const tagRe = /\[(\w+)\s+"([^"]*)"\]/g; let m; while ((m = tagRe.exec(pgn)) !== null) tags[m[1]] = m[2]; let moves = pgn.replace(/\[.*?\]/gs, "").replace(/\{[^}]*\}/gs, " ").replace(/;[^\n]*/g, " ").trim(); moves = moves.replace(/\s*(1-0|0-1|1\/2-1\/2|\*)\s*$/, "").trim(); return { tags, tokens: tokenizeMoves(moves) } }
-
 function tokenizeMoves(str) { const result = []; let i = 0; const s = str.trim(); while (i < s.length) { while (i < s.length && /\s/.test(s[i])) i++; if (i >= s.length) break; if (s[i] === "(") { result.push({ type: "varOpen" }); i++; continue } if (s[i] === ")") { result.push({ type: "varClose" }); i++; continue } if (/\d/.test(s[i])) { while (i < s.length && /[\d.]/.test(s[i])) i++; while (i < s.length && /[\s.]/.test(s[i])) i++; continue } if (s[i] === "$") { i++; while (i < s.length && /\d/.test(s[i])) i++; continue } if (/[!?]/.test(s[i])) { let a = ""; while (i < s.length && /[!?]/.test(s[i])) { a += s[i]; i++ } if (result.length > 0 && result[result.length - 1].type === "move") result[result.length - 1].annotation = a; continue } let tok = ""; while (i < s.length && !/[\s(){}]/.test(s[i])) { tok += s[i]; i++ } if (tok) result.push({ type: "move", value: tok }) } return result }
-
 function buildMoveTree(tokens) { const root = []; const stack = [root]; let cur = root; for (const tok of tokens) { if (tok.type === "move") { cur.push({ san: tok.value, annotation: tok.annotation || "", variations: [] }) } else if (tok.type === "varOpen") { if (cur.length > 0) { const vl = []; cur[cur.length - 1].variations.push(vl); stack.push(cur); cur = vl } } else if (tok.type === "varClose") { cur = stack.pop() || root } } return root }
-
 function resolveSAN(san, g, color, ms) { san = san.replace(/[+#]/g, ""); const promo = san.match(/=([QRBN])/); san = san.replace(/=[QRBN]/, ""); if (san === "O-O" || san === "0-0") { const row = color === "white" ? 7 : 0; return { fromCol: 4, fromRow: row, toCol: 6, toRow: row, promo: null } } if (san === "O-O-O" || san === "0-0-0") { const row = color === "white" ? 7 : 0; return { fromCol: 4, fromRow: row, toCol: 2, toRow: row, promo: null } } let pieceType = "pawn", fromFile = null, fromRank = null, toAlg; let rest = san; if (/^[KQRBN]/.test(rest)) { pieceType = { K: "king", Q: "queen", R: "rook", B: "bishop", N: "knight" }[rest[0]]; rest = rest.slice(1) } rest = rest.replace("x", ""); toAlg = rest.slice(-2); rest = rest.slice(0, -2); if (rest.length === 1) { if (/[a-h]/.test(rest)) fromFile = FILES_STR.indexOf(rest); else fromRank = 8 - parseInt(rest) } if (rest.length === 2) { fromFile = FILES_STR.indexOf(rest[0]); fromRank = 8 - parseInt(rest[1]) } const tCol = FILES_STR.indexOf(toAlg[0]), tRow = 8 - parseInt(toAlg[1]); if (tCol < 0 || tRow < 0) return null; for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) { const p = g[idx(c, r)]; if (!p || p.color !== color || p.type !== pieceType) continue; if (fromFile !== null && c !== fromFile) continue; if (fromRank !== null && r !== fromRank) continue; const moves = legalMoves(g, c, r, p, ms); if (moves.includes(idx(tCol, tRow))) return { fromCol: c, fromRow: r, toCol: tCol, toRow: tRow, promo: promo ? promo[1].toLowerCase() : null } } return null }
-
 function buildPositions(moveTree) { const positions = []; let g = freshBoard(), ms = [], turn = 0; positions.push({ grid: cloneGrid(g), moveStack: [...ms], turn }); for (const node of moveTree) { const color = turn % 2 === 0 ? "white" : "black"; const coords = resolveSAN(node.san, g, color, ms); if (!coords) { console.warn("SAN error:", node.san); turn++; continue } applyMove(g, coords.fromCol, coords.fromRow, coords.toCol, coords.toRow, ms); if (coords.promo) { const pm = { q: "queen", r: "rook", b: "bishop", n: "knight" }; g[idx(coords.toCol, coords.toRow)] = createPiece(pm[coords.promo] || "queen", color); g[idx(coords.toCol, coords.toRow)].hasMoved = true } turn++; positions.push({ grid: cloneGrid(g), moveStack: ms.map(m => ({ ...m })), turn, moveFrom: coords.fromCol + "," + coords.fromRow, moveTo: coords.toCol + "," + coords.toRow }) } return positions }
 
 // ═══════════════════════════════════════════════════════
-// STOCKFISH MANAGER
+// STOCKFISH MANAGER — single global message handler
 // ═══════════════════════════════════════════════════════
 let stockfish = null;
 let sfReady = false;
 let sfBusy = false;
-let sfCurrentReject = null;
+let sfPending = null; // { type, resolve, reject, timeout, fen, stm, goCmd, multiPV, numPV, best, results }
 
-const PREANALYSIS_MOVETIME = 5000; // 5 Sekunden pro Zug
+const PREANALYSIS_DEPTH = 20;
 let liveTimeMs = 3000;
 
 function sfTerminate() {
-    if (stockfish) {
-        try { stockfish.terminate(); } catch (e) {}
-        stockfish = null;
+    if (stockfish) { try { stockfish.terminate(); } catch (e) { } stockfish = null; }
+    sfReady = false; sfBusy = false;
+    if (sfPending) { clearTimeout(sfPending.timeout); sfPending.reject("terminated"); sfPending = null; }
+}
+
+// ONE global handler — assigned once on init, never overwritten
+function sfOnMessage(e) {
+    const msg = e.data;
+
+    // readyok during init phase
+    if (!sfReady && msg === "readyok") {
+        sfReady = true;
+        if (sfPending?.type === "init") {
+            clearTimeout(sfPending.timeout);
+            sfPending.resolve();
+            sfPending = null;
+        }
+        return;
     }
-    sfReady = false;
-    sfBusy = false;
-    if (sfCurrentReject) { sfCurrentReject("terminated"); sfCurrentReject = null; }
+
+    // readyok during search phase → fire position + go
+    if (msg === "readyok" && sfPending?.type === "search") {
+        stockfish.postMessage("position fen " + sfPending.fen);
+        stockfish.postMessage(sfPending.goCmd);
+        return;
+    }
+
+    if (!sfPending || sfPending.type === "init") return;
+
+    // info lines
+    if (msg.startsWith("info") && msg.includes("score") && msg.includes(" pv ")) {
+        const cpM = msg.match(/score cp (-?\d+)/);
+        const mM = msg.match(/score mate (-?\d+)/);
+        const pvM = msg.match(/ pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
+        if (!pvM) return;
+
+        if (sfPending.multiPV) {
+            const pvIdxM = msg.match(/multipv (\d+)/);
+            if (!pvIdxM) return;
+            const pvIdx = parseInt(pvIdxM[1]) - 1;
+            let cp = 0, mate = null;
+            if (mM) { mate = parseInt(mM[1]); cp = sfPending.stm === "b" ? (mate > 0 ? -10000 : 10000) : (mate > 0 ? 10000 : -10000); }
+            else if (cpM) { cp = sfPending.stm === "b" ? -parseInt(cpM[1]) : parseInt(cpM[1]); }
+            sfPending.results[pvIdx] = { cp, mate, move: pvM[1] };
+        } else {
+            sfPending.best.bestMove = pvM[1];
+            if (mM) { const mv = parseInt(mM[1]); sfPending.best.mate = sfPending.stm === "b" ? -mv : mv; sfPending.best.cp = sfPending.best.mate > 0 ? 10000 : -10000; }
+            else if (cpM) { sfPending.best.cp = sfPending.stm === "b" ? -parseInt(cpM[1]) : parseInt(cpM[1]); sfPending.best.mate = null; }
+        }
+    }
+
+    // search done
+    if (msg.startsWith("bestmove")) {
+        if (!sfPending) return;
+        clearTimeout(sfPending.timeout);
+        const { resolve, multiPV, best, results } = sfPending;
+        if (!multiPV) { const m = msg.split(" ")[1]; if (m && m !== "(none)" && m !== "0000") best.bestMove ??= m; }
+        sfPending = null; sfBusy = false;
+        resolve(multiPV ? results : best);
+    }
 }
 
 function initStockfish() {
     return new Promise((resolve, reject) => {
-        // Terminate any existing worker before creating a new one
-        if (stockfish) {
-            sfTerminate();
-        }
-
-        let resolved = false;
-        const initTimeout = setTimeout(() => {
-            if (!resolved) {
-                console.error("Stockfish init timeout — terminating");
-                sfTerminate();
-                reject("init timeout");
-            }
-        }, 10000);
-
-        stockfish = new Worker("stockfish.js");
-
+        if (stockfish) sfTerminate();
+        stockfish = new Worker("stockfish-18.js");
         stockfish.onerror = err => {
             console.error("Stockfish worker error:", err);
-            clearTimeout(initTimeout);
+            const rej = sfPending?.reject || reject;
             sfTerminate();
-            if (!resolved) { resolved = true; reject("worker error"); }
+            rej("worker error");
         };
-
-        stockfish.onmessage = e => {
-            if (e.data === "readyok") {
-                clearTimeout(initTimeout);
-                sfReady = true;
-                resolved = true;
-                resolve();
-            }
-        };
-
+        stockfish.onmessage = sfOnMessage; // set once, never overwritten
+        const timeout = setTimeout(() => { console.error("Stockfish init timeout"); sfTerminate(); reject("init timeout"); }, 10000);
+        sfPending = { type: "init", resolve, reject, timeout };
         stockfish.postMessage("uci");
         stockfish.postMessage("setoption name Hash value 128");
+        stockfish.postMessage("setoption name EvalFile value <empty>");
+        stockfish.postMessage("setoption name EvalFileSmall value <empty>");
         stockfish.postMessage("setoption name MultiPV value 1");
         stockfish.postMessage("isready");
     });
 }
 
-// Central gatekeeper — ensures only one search runs at a time
-// Auto-restarts the worker if it crashed
-function sfRun(fn) {
-    return new Promise(async (resolve, reject) => {
-        if (!sfReady || !stockfish) {
-            try {
-                console.warn("Stockfish not ready — restarting worker...");
-                await initStockfish();
-            } catch (e) {
-                reject("Stockfish restart failed: " + e);
-                return;
-            }
-        }
-        if (sfBusy) {
-            stockfish.postMessage("stop");
-            if (sfCurrentReject) { sfCurrentReject("cancelled"); sfCurrentReject = null; }
-        }
+async function sfStartSearch(opts) {
+    if (!sfReady || !stockfish) { console.warn("Stockfish not ready — restarting..."); await initStockfish(); }
+    if (sfBusy) {
+        stockfish.postMessage("stop");
+        if (sfPending) { clearTimeout(sfPending.timeout); sfPending.reject("cancelled"); sfPending = null; }
+        sfBusy = false;
+    }
+    return new Promise((resolve, reject) => {
         sfBusy = true;
-        sfCurrentReject = reject;
-        fn(
-            val => { sfBusy = false; sfCurrentReject = null; resolve(val); },
-            err => { sfBusy = false; sfCurrentReject = null; reject(err); }
-        );
+        const safetyMs = opts.movetime ? opts.movetime + 5000 : (opts.depth || 20) * 1500 + 5000;
+        const timeout = setTimeout(() => {
+            sfBusy = false; sfPending = null;
+            resolve(opts.multiPV ? [] : { cp: 0, mate: null, bestMove: null });
+        }, safetyMs);
+        sfPending = {
+            type: "search", resolve, reject, timeout,
+            fen: opts.fen, stm: opts.fen.split(" ")[1],
+            goCmd: opts.movetime ? "go movetime " + opts.movetime : "go depth " + opts.depth,
+            multiPV: opts.multiPV || false,
+            best: { cp: 0, mate: null, bestMove: null },
+            results: []
+        };
+        stockfish.postMessage("stop");
+        stockfish.postMessage("setoption name MultiPV value " + (opts.numPV || 1));
+        if (opts.skillLevel !== undefined) {
+            stockfish.postMessage("setoption name UCI_LimitStrength value true");
+            stockfish.postMessage("setoption name Skill Level value " + opts.skillLevel);
+        } else {
+            stockfish.postMessage("setoption name UCI_LimitStrength value false");
+            stockfish.postMessage("setoption name Skill Level value 20");
+        }
+        stockfish.postMessage("isready");
     });
 }
 
 function sfEval(fen, { depth = null, movetime = null } = {}) {
-    return sfRun((resolve) => {
-        const stm = fen.split(" ")[1];
-        let best = { cp: 0, mate: null, bestMove: null };
-        const safetyMs = (movetime ?? 10000) + 3000;
-        const timeout = setTimeout(() => resolve(best), safetyMs);
-
-        stockfish.onmessage = e => {
-            const msg = e.data;
-            if (msg === "readyok") {
-                stockfish.postMessage("position fen " + fen);
-                stockfish.postMessage(movetime ? "go movetime " + movetime : "go depth " + depth);
-                return;
-            }
-            if (msg.startsWith("info") && msg.includes("score") && msg.includes(" pv ")) {
-                const cpM = msg.match(/score cp (-?\d+)/);
-                const mM  = msg.match(/score mate (-?\d+)/);
-                const pvM = msg.match(/ pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
-                if (pvM) best.bestMove = pvM[1];
-                if (mM) {
-                    const mv = parseInt(mM[1]);
-                    best.mate = stm === "b" ? -mv : mv;
-                    best.cp   = best.mate > 0 ? 10000 : -10000;
-                } else if (cpM) {
-                    best.cp   = stm === "b" ? -parseInt(cpM[1]) : parseInt(cpM[1]);
-                    best.mate = null;
-                }
-            }
-            if (msg.startsWith("bestmove")) {
-                const m = msg.split(" ")[1];
-                if (m && m !== "(none)" && m !== "0000") best.bestMove ??= m;
-                clearTimeout(timeout);
-                resolve(best);
-            }
-        };
-
-        stockfish.postMessage("stop");
-        stockfish.postMessage("setoption name MultiPV value 1");
-        stockfish.postMessage("isready"); // → readyok → position + go
-    });
+    return sfStartSearch({ fen, depth, movetime });
 }
-
-function sfEvalMultiPV(fen, movetime, numPV, useMovetime = false) {
-    return sfRun((resolve) => {
-        const stm = fen.split(" ")[1];
-        const results = [];
-        const safetyMs = (useMovetime ? movetime : 15000) + 3000;
-        const timeout = setTimeout(() => resolve(results), safetyMs);
-
-        stockfish.onmessage = e => {
-            const msg = e.data;
-            if (msg === "readyok") {
-                stockfish.postMessage("position fen " + fen);
-                stockfish.postMessage(useMovetime ? "go movetime " + movetime : "go depth " + movetime);
-                return;
-            }
-            if (msg.startsWith("info") && msg.includes("multipv") && msg.includes(" pv ")) {
-                const pvIdxM = msg.match(/multipv (\d+)/);
-                const cpM    = msg.match(/score cp (-?\d+)/);
-                const mM     = msg.match(/score mate (-?\d+)/);
-                const pvM    = msg.match(/ pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
-                if (!pvIdxM || !pvM) return;
-                const pvIdx = parseInt(pvIdxM[1]) - 1;
-                let cp = 0, mate = null;
-                if (mM) {
-                    mate = parseInt(mM[1]);
-                    cp   = stm === "b" ? (mate > 0 ? -10000 : 10000) : (mate > 0 ? 10000 : -10000);
-                } else if (cpM) {
-                    cp = stm === "b" ? -parseInt(cpM[1]) : parseInt(cpM[1]);
-                }
-                results[pvIdx] = { cp, mate, move: pvM[1] };
-            }
-            if (msg.startsWith("bestmove")) {
-                clearTimeout(timeout);
-                resolve(results);
-            }
-        };
-
-        stockfish.postMessage("stop");
-        stockfish.postMessage("setoption name MultiPV value " + numPV);
-        stockfish.postMessage("isready");
-    });
+function sfEvalMultiPV(fen, depth, numPV) {
+    return sfStartSearch({ fen, depth, numPV, multiPV: true });
 }
-
 function getBotMove(fen, elo) {
-    return sfRun((resolve) => {
-        let bestMove = null;
-        const skill    = Math.min(20, Math.max(0, Math.round((elo - 400) / 90)));
-        const moveTime = Math.min(2000, Math.max(100, elo / 2));
-        const timeout  = setTimeout(() => resolve(bestMove), moveTime + 4000);
-
-        stockfish.onmessage = e => {
-            const msg = e.data;
-            if (msg === "readyok") {
-                stockfish.postMessage("position fen " + fen);
-                stockfish.postMessage("go movetime " + moveTime);
-                return;
-            }
-            if (msg.startsWith("bestmove")) {
-                const m = msg.split(" ")[1];
-                if (m && m !== "(none)") bestMove = m;
-                clearTimeout(timeout);
-                resolve(bestMove);
-            }
-        };
-
-        stockfish.postMessage("stop");
-        stockfish.postMessage("setoption name MultiPV value 1");
-        stockfish.postMessage("setoption name Skill Level value " + skill);
-        stockfish.postMessage("isready");
-    });
+    const skill = Math.min(20, Math.max(0, Math.round((elo - 400) / 90)));
+    const moveTime = Math.min(2000, Math.max(100, elo / 2));
+    return sfStartSearch({ fen, movetime: moveTime, skillLevel: skill });
 }
 
 // ═══════════════════════════════════════════════════════
@@ -264,18 +194,12 @@ function getBotMove(fen, elo) {
 // ═══════════════════════════════════════════════════════
 function staticExchangeEval(g, fc, fr, tc, tr, piece, ms) {
     const capturedVal = g[idx(tc, tr)] ? PIECE_VALUES[g[idx(tc, tr)].type] : 0;
-    if (capturedVal === 0 && !sqAttacked(g, tc, tr, piece.color === "white" ? "black" : "white", ms)) {
-        return 0;
-    }
+    if (capturedVal === 0 && !sqAttacked(g, tc, tr, piece.color === "white" ? "black" : "white", ms)) { return 0; }
     const enemy = piece.color === "white" ? "black" : "white";
     if (!sqAttacked(g, tc, tr, enemy, ms)) return capturedVal;
     return capturedVal - PIECE_VALUES[piece.type];
 }
-
-function isSacrifice(g, fc, fr, tc, tr, piece, ms) {
-    const see = staticExchangeEval(g, fc, fr, tc, tr, piece, ms);
-    return see < -50;
-}
+function isSacrifice(g, fc, fr, tc, tr, piece, ms) { return staticExchangeEval(g, fc, fr, tc, tr, piece, ms) < -50; }
 
 // ═══════════════════════════════════════════════════════
 // MOVE CLASSIFICATION
@@ -283,108 +207,37 @@ function isSacrifice(g, fc, fr, tc, tr, piece, ms) {
 function classifyMove(delta, sacrificed, prevEv, currEv, movedColor, playedMoveUCI, engineBestUCI, isOnlyGoodMove) {
     const prevForMover = movedColor === "white" ? prevEv.cp : -prevEv.cp;
     const currForMover = movedColor === "white" ? currEv.cp : -currEv.cp;
-    const playedBestMove = playedMoveUCI && engineBestUCI &&
-        playedMoveUCI.slice(0, 4) === engineBestUCI.slice(0, 4);
-
-    // Checkmate delivered
-    if (currEv && currEv.mate !== null) {
-        const good = movedColor === "white" ? currEv.mate > 0 : currEv.mate < 0;
-        if (good) return { key: "best", sym: "★", label: "Bester Zug (Matt!)", css: "badge-best" };
-    }
-
-    // Was facing forced mate, managed to avoid it
-    if (prevEv && prevEv.mate !== null) {
-        const wasBad = movedColor === "white" ? prevEv.mate < 0 : prevEv.mate > 0;
-        if (wasBad && delta < 50) return { key: "good", sym: "·", label: "Gut", css: "badge-good" };
-    }
-
-    // Brilliant: true sacrifice + doesn't worsen position
-    if (sacrificed && delta <= 50) {
-        return { key: "brilliant", sym: "!!", label: "Brillant", css: "badge-brilliant" };
-    }
-
-    // Best: played move = engine's top move
-    if (playedBestMove) {
-        return { key: "best", sym: "★", label: "Bester Zug", css: "badge-best" };
-    }
-
-    // Great: only move that maintained the advantage
-    if (isOnlyGoodMove && delta <= 30) {
-        return { key: "great", sym: "!", label: "Großartig", css: "badge-great" };
-    }
-
-    // Excellent: lost < 10cp
-    if (delta <= 10) {
-        return { key: "excellent", sym: "✓", label: "Ausgezeichnet", css: "badge-excellent" };
-    }
-
-    // Good: lost < 30cp
-    if (delta <= 30) {
-        return { key: "good", sym: "·", label: "Gut", css: "badge-good" };
-    }
-
-    // Blunder: was in advantage, now equal or worse
-    if (prevForMover >= 100 && currForMover <= 0) {
-        return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
-    }
-    // Blunder: was equal, now opponent has clear advantage
-    if (Math.abs(prevForMover) < 100 && currForMover <= -100) {
-        return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
-    }
-    // Blunder: was behind, extreme drop
-    if (prevForMover < -100 && delta >= 300) {
-        return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
-    }
-    // Blunder: opponent now has forced mate
-    if (currEv.mate !== null) {
-        const opponentMating = movedColor === "white" ? currEv.mate < 0 : currEv.mate > 0;
-        if (opponentMating) return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
-    }
-
-    // Missed Chance: a great move existed but wasn't played
-    if (isOnlyGoodMove && delta > 30) {
-        return { key: "missed", sym: "⊘", label: "Verpasste Chance", css: "badge-missed" };
-    }
-
-    // Inaccuracy: in advantage, still some advantage but slightly worse
-    if (prevForMover >= 100 && currForMover > 0 && delta > 30 && delta <= 200) {
-        return { key: "inaccuracy", sym: "?!", label: "Ungenauigkeit", css: "badge-inaccuracy" };
-    }
-    // Inaccuracy: not in advantage, losing < 100cp more
-    if (prevForMover < 100 && delta < 100) {
-        return { key: "inaccuracy", sym: "?!", label: "Ungenauigkeit", css: "badge-inaccuracy" };
-    }
-
-    // Mistake
-    if (prevForMover >= 100 && currForMover > 0 && delta > 200) {
-        return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" };
-    }
-    if (delta >= 100 && delta < 300) {
-        return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" };
-    }
-
+    const playedBestMove = playedMoveUCI && engineBestUCI && playedMoveUCI.slice(0, 4) === engineBestUCI.slice(0, 4);
+    if (currEv?.mate !== null) { const good = movedColor === "white" ? currEv.mate > 0 : currEv.mate < 0; if (good) return { key: "best", sym: "★", label: "Bester Zug (Matt!)", css: "badge-best" }; }
+    if (prevEv?.mate !== null) { const wasBad = movedColor === "white" ? prevEv.mate < 0 : prevEv.mate > 0; if (wasBad && delta < 50) return { key: "good", sym: "·", label: "Gut", css: "badge-good" }; }
+    if (sacrificed && delta <= 50) return { key: "brilliant", sym: "!!", label: "Brillant", css: "badge-brilliant" };
+    if (playedBestMove) return { key: "best", sym: "★", label: "Bester Zug", css: "badge-best" };
+    if (isOnlyGoodMove && delta <= 30) return { key: "great", sym: "!", label: "Großartig", css: "badge-great" };
+    if (delta <= 10) return { key: "excellent", sym: "✓", label: "Ausgezeichnet", css: "badge-excellent" };
+    if (delta <= 30) return { key: "good", sym: "·", label: "Gut", css: "badge-good" };
+    if (prevForMover >= 100 && currForMover <= 0) return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
+    if (Math.abs(prevForMover) < 100 && currForMover <= -100) return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
+    if (prevForMover < -100 && delta >= 300) return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
+    if (currEv?.mate !== null) { const opponentMating = movedColor === "white" ? currEv.mate < 0 : currEv.mate > 0; if (opponentMating) return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" }; }
+    if (isOnlyGoodMove && delta > 30) return { key: "missed", sym: "⊘", label: "Verpasste Chance", css: "badge-missed" };
+    if (prevForMover >= 100 && currForMover > 0 && delta > 30 && delta <= 200) return { key: "inaccuracy", sym: "?!", label: "Ungenauigkeit", css: "badge-inaccuracy" };
+    if (prevForMover < 100 && delta < 100) return { key: "inaccuracy", sym: "?!", label: "Ungenauigkeit", css: "badge-inaccuracy" };
+    if (prevForMover >= 100 && currForMover > 0 && delta > 200) return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" };
+    if (delta >= 100 && delta < 300) return { key: "mistake", sym: "?", label: "Fehler", css: "badge-mistake" };
     return { key: "blunder", sym: "??", label: "Grober Fehler", css: "badge-blunder" };
 }
-
 function evalToLabel(cp) { const a = Math.abs(cp), s = cp >= 0 ? "Weiß" : "Schwarz"; if (a < 20) return "Ausgeglichen"; if (a < 80) return `Leichter Vorteil ${s}`; if (a < 200) return `Klarer Vorteil ${s}`; if (a < 500) return `Großer Vorteil ${s}`; return `Gewinnend für ${s}` }
 
 // ═══════════════════════════════════════════════════════
 // BOARD DOM BUILDER
 // ═══════════════════════════════════════════════════════
 function buildBoardDOM(boardEl, ranksEl, filesEl) { const squares = [], pieces = []; for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) { const btn = document.createElement("button"); btn.classList.add("square", (r + c) % 2 === 0 ? "light" : "dark"); btn.dataset.row = r; btn.dataset.col = c; const sp = document.createElement("span"); sp.classList.add("piece"); squares.push(btn); pieces.push(sp); btn.appendChild(sp); boardEl.appendChild(btn) } for (let i = 8; i >= 1; i--) { const d = document.createElement("div"); d.textContent = i; ranksEl.appendChild(d) } for (const l of "abcdefgh") { const d = document.createElement("div"); d.textContent = l; filesEl.appendChild(d) } return { squares, pieces } }
-
 function drawGrid(g, squares, pieces) { for (let i = 0; i < 64; i++) { const p = g[i], sp = pieces[i]; if (!p) { sp.textContent = ""; sp.style.visibility = "hidden" } else { sp.textContent = SYM[p.color][p.type]; sp.style.visibility = "visible" } } }
-
 function clearHighlightsBoard(squares) { squares.forEach(sq => { sq.classList.remove("sq-lastmove", "sq-check"); sq.querySelector(".sq-dot")?.remove(); sq.querySelector(".sq-ring")?.remove(); sq.querySelector(".move-badge")?.remove() }) }
-
 function showDotsBoard(g, col, row, piece, ms, squares) { const moves = legalMoves(g, col, row, piece, ms); moves.forEach(ti => { const sq = squares[ti]; const hasPiece = g[ti] !== null; const el = document.createElement("div"); el.className = hasPiece ? "sq-ring" : "sq-dot"; sq.appendChild(el) }); return moves }
-
 function clearDotsBoard(squares) { squares.forEach(sq => { sq.querySelector(".sq-dot")?.remove(); sq.querySelector(".sq-ring")?.remove() }) }
-
 function drawArrowSVG(svgEl, markerId, fromCol, fromRow, toCol, toRow) { svgEl.querySelectorAll(".sf-arrow").forEach(e => e.remove()); const fx = fromCol * SQ + SQ / 2, fy = fromRow * SQ + SQ / 2, tx = toCol * SQ + SQ / 2, ty = toRow * SQ + SQ / 2; const dx = tx - fx, dy = ty - fy, len = Math.sqrt(dx * dx + dy * dy); const ex = tx - (dx / len) * 18, ey = ty - (dy / len) * 18; const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect"); rect.setAttribute("x", fromCol * SQ); rect.setAttribute("y", fromRow * SQ); rect.setAttribute("width", SQ); rect.setAttribute("height", SQ); rect.setAttribute("fill", markerId.includes("red") ? "rgba(220,60,60,0.18)" : "rgba(50,200,100,0.18)"); rect.setAttribute("class", "sf-arrow"); svgEl.appendChild(rect); const line = document.createElementNS("http://www.w3.org/2000/svg", "line"); line.setAttribute("x1", fx); line.setAttribute("y1", fy); line.setAttribute("x2", ex); line.setAttribute("y2", ey); line.setAttribute("stroke", markerId.includes("red") ? "rgba(220,60,60,0.85)" : markerId.includes("blue") ? "rgba(100,160,240,0.85)" : "rgba(50,200,100,0.85)"); line.setAttribute("stroke-width", "9"); line.setAttribute("stroke-linecap", "round"); line.setAttribute("marker-end", `url(#${markerId})`); line.setAttribute("class", "sf-arrow"); svgEl.appendChild(line) }
-
 function clearArrowSVG(svgEl) { svgEl.querySelectorAll(".sf-arrow").forEach(e => e.remove()) }
-
 function showCheckHl(g, turn, squares) { const color = turn % 2 === 0 ? "white" : "black"; if (!isInCheck(g, color, [])) return; for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) { const p = g[idx(c, r)]; if (p && p.color === color && p.type === "king") { squares[idx(c, r)].classList.add("sq-check"); return } } }
 
 // ═══════════════════════════════════════════════════════
@@ -416,13 +269,9 @@ function gStartGame(mode, playerColor, botElo) {
     gGrid = freshBoard(); gMoveStack = []; gTurn = 0;
     gSelectedSq = null; gBotThinking = false; gGameOver = false; gHistory = [];
     document.getElementById("gameOverBanner").classList.remove("show");
-    gRenderBoard();
-    gRenderNotation();
+    gRenderBoard(); gRenderNotation();
     document.getElementById("gameStatus").textContent = "";
-    gSquares.forEach(sq => {
-        const newSq = sq.cloneNode(true);
-        sq.parentNode.replaceChild(newSq, sq);
-    });
+    gSquares.forEach(sq => { const newSq = sq.cloneNode(true); sq.parentNode.replaceChild(newSq, sq); });
     gSquares = Array.from(gBoardEl.querySelectorAll(".square"));
     gPieces = gSquares.map(sq => sq.querySelector(".piece"));
     gSquares.forEach(sq => sq.addEventListener("click", gHandleClick));
@@ -435,7 +284,6 @@ function gHandleClick(e) {
     const col = +e.currentTarget.dataset.col, row = +e.currentTarget.dataset.row;
     const turnColor = gTurn % 2 === 0 ? "white" : "black";
     if (gMode === "bot" && turnColor !== gPlayerColor) return;
-
     if (gSelectedSq === null) {
         const p = gGrid[idx(col, row)];
         if (!p || p.color !== turnColor) return;
@@ -465,20 +313,12 @@ function gHandleClick(e) {
 function gMakeMove(fc, fr, tc, tr, piece, promoType = "queen") {
     const san = buildSAN(gGrid, fc, fr, tc, tr, piece, gMoveStack);
     applyMove(gGrid, fc, fr, tc, tr, gMoveStack);
-    if (piece.type === "pawn" && (tr === 0 || tr === 7)) {
-        gGrid[idx(tc, tr)] = createPiece(promoType, piece.color);
-        gGrid[idx(tc, tr)].hasMoved = true;
-    }
+    if (piece.type === "pawn" && (tr === 0 || tr === 7)) { gGrid[idx(tc, tr)] = createPiece(promoType, piece.color); gGrid[idx(tc, tr)].hasMoved = true; }
     gTurn++;
     const suffix = getSuffix(gGrid, gTurn, gMoveStack);
     gHistory.push({ san: san + suffix, fromCol: fc, fromRow: fr, toCol: tc, toRow: tr, suffix });
-    gRenderBoard();
-    gRenderNotation();
-    gCheckGameOver(suffix);
-    if (!gGameOver && gMode === "bot") {
-        const nextColor = gTurn % 2 === 0 ? "white" : "black";
-        if (nextColor !== gPlayerColor) { setTimeout(() => gBotMove(), 200); }
-    }
+    gRenderBoard(); gRenderNotation(); gCheckGameOver(suffix);
+    if (!gGameOver && gMode === "bot") { const nextColor = gTurn % 2 === 0 ? "white" : "black"; if (nextColor !== gPlayerColor) { setTimeout(() => gBotMove(), 200); } }
 }
 
 async function gBotMove() {
@@ -508,14 +348,8 @@ function gCheckGameOver(suffix) {
         gGameOver = true;
         gSquares.forEach(sq => sq.removeEventListener("click", gHandleClick));
         const banner = document.getElementById("gameOverBanner");
-        if (inCk) {
-            const winner = turnColor === "white" ? "Schwarz" : "Weiß";
-            document.getElementById("gameOverTitle").textContent = "Schachmatt!";
-            document.getElementById("gameOverSub").textContent = winner + " gewinnt";
-        } else {
-            document.getElementById("gameOverTitle").textContent = "Patt!";
-            document.getElementById("gameOverSub").textContent = "Unentschieden";
-        }
+        if (inCk) { const winner = turnColor === "white" ? "Schwarz" : "Weiß"; document.getElementById("gameOverTitle").textContent = "Schachmatt!"; document.getElementById("gameOverSub").textContent = winner + " gewinnt"; }
+        else { document.getElementById("gameOverTitle").textContent = "Patt!"; document.getElementById("gameOverSub").textContent = "Unentschieden"; }
         banner.classList.add("show");
     }
 }
@@ -523,11 +357,7 @@ function gCheckGameOver(suffix) {
 function gRenderBoard() {
     drawGrid(gGrid, gSquares, gPieces);
     clearHighlightsBoard(gSquares);
-    if (gHistory.length > 0) {
-        const last = gHistory[gHistory.length - 1];
-        gSquares[idx(last.fromCol, last.fromRow)].classList.add("sq-lastmove");
-        gSquares[idx(last.toCol, last.toRow)].classList.add("sq-lastmove");
-    }
+    if (gHistory.length > 0) { const last = gHistory[gHistory.length - 1]; gSquares[idx(last.fromCol, last.fromRow)].classList.add("sq-lastmove"); gSquares[idx(last.toCol, last.toRow)].classList.add("sq-lastmove"); }
     showCheckHl(gGrid, gTurn, gSquares);
     const wb = gTurn % 2 === 0;
     document.getElementById("gStripBottom").classList.toggle("active", wb);
@@ -596,7 +426,6 @@ function aHandleClick(e) {
     if (!curGrid) return;
     const turn = freeGrid ? positions[curPos].turn + freeMoves.length : positions[curPos].turn;
     const color = turn % 2 === 0 ? "white" : "black";
-
     if (aSelectedSq === null) {
         const p = curGrid[idx(col, row)];
         if (!p || p.color !== color) return;
@@ -619,50 +448,32 @@ function aHandleClick(e) {
         const ms = freeGrid ? freeMoveStack : positions[curPos].moveStack || [];
         const moves = legalMoves(curGrid, from.col, from.row, from.piece, ms);
         if (!moves.includes(idx(col, row))) { aSelectedSq = null; return; }
-
-        if (freeGrid === null && matchesNextPGNMove(from.col, from.row, col, row)) {
-            aSelectedSq = null;
-            aGoToPosition(curPos + 1);
-            return;
-        }
-
+        if (freeGrid === null && matchesNextPGNMove(from.col, from.row, col, row)) { aSelectedSq = null; aGoToPosition(curPos + 1); return; }
         const preGrid = cloneGrid(freeGrid || positions[curPos].grid);
         const preMS = (freeGrid ? freeMoveStack : positions[curPos].moveStack || []).map(m => ({ ...m }));
-
-        if (freeGrid === null) {
-            freeGrid = cloneGrid(positions[curPos].grid);
-            freeMoveStack = (positions[curPos].moveStack || []).map(m => ({ ...m }));
-        }
-
+        if (freeGrid === null) { freeGrid = cloneGrid(positions[curPos].grid); freeMoveStack = (positions[curPos].moveStack || []).map(m => ({ ...m })); }
         const san = buildSAN(freeGrid, from.col, from.row, col, row, from.piece, freeMoveStack);
         applyMove(freeGrid, from.col, from.row, col, row, freeMoveStack);
-        if (from.piece.type === "pawn" && (row === 0 || row === 7)) {
-            freeGrid[idx(col, row)] = createPiece("queen", color);
-            freeGrid[idx(col, row)].hasMoved = true;
-        }
+        if (from.piece.type === "pawn" && (row === 0 || row === 7)) { freeGrid[idx(col, row)] = createPiece("queen", color); freeGrid[idx(col, row)].hasMoved = true; }
         const suffix = getSuffix(freeGrid, turn + 1, freeMoveStack);
         freeMoves.push({ san: san + suffix, fromCol: from.col, fromRow: from.row, toCol: col, toRow: row, piece: from.piece, preGrid, preMoveStack: preMS });
         freeEvals.push(null); freeClassifications.push(null);
         aSelectedSq = null;
-        aRefreshBoard();
-        aUpdateNavButtons();
-        aLiveEvalFree();
+        aRefreshBoard(); aUpdateNavButtons(); aLiveEvalFree();
     }
 }
 
 function aExitFreePlay() {
     if (freeGrid === null) return;
     freeGrid = null; freeMoveStack = []; freeMoves = []; freeEvals = []; freeClassifications = [];
-    aSelectedSq = null;
-    clearDotsBoard(aSquares);
+    aSelectedSq = null; clearDotsBoard(aSquares);
 }
 
 function aGoToPosition(posIdx) {
     aExitFreePlay();
     posIdx = Math.max(0, Math.min(positions.length - 1, posIdx));
     curPos = posIdx;
-    aRefreshBoard();
-    aUpdateNavButtons();
+    aRefreshBoard(); aUpdateNavButtons();
     aUpdateEvalUI(evals[curPos] || null, false);
     lastKnownEval = evals[curPos] || null;
 }
@@ -673,7 +484,6 @@ function aLiveEvalFree() {
     const preTurn = positions[curPos].turn + freeMoves.length - 1;
     const preFen = generateFEN(lastFm.preGrid, preTurn, lastFm.preMoveStack);
     aUpdateEvalUI(null, true);
-
     sfEval(preFen, { movetime: liveTimeMs }).then(prevEv => {
         if (freeGrid === null) return;
         const postTurn = positions[curPos].turn + freeMoves.length;
@@ -693,8 +503,7 @@ function aLiveEvalFree() {
             const badge = document.createElement("div");
             badge.className = "move-badge " + cl.css; badge.title = cl.label; badge.textContent = cl.sym;
             sq.appendChild(badge);
-            aUpdateEvalUI(ev, false);
-            aRenderNotation();
+            aUpdateEvalUI(ev, false); aRenderNotation();
         });
     });
 }
@@ -705,44 +514,18 @@ function aRefreshBoard() {
     drawGrid(activeGrid, aSquares, aPieces);
     clearHighlightsBoard(aSquares);
     if (freeGrid) {
-        if (freeMoves.length > 0) {
-            const lm = freeMoves[freeMoves.length - 1];
-            aSquares[idx(lm.fromCol, lm.fromRow)].classList.add("sq-lastmove");
-            aSquares[idx(lm.toCol, lm.toRow)].classList.add("sq-lastmove");
-        } else {
-            const pos = positions[curPos];
-            if (pos && pos.moveFrom) {
-                const [fc, fr] = pos.moveFrom.split(",").map(Number);
-                const [tc, tr] = pos.moveTo.split(",").map(Number);
-                aSquares[idx(fc, fr)].classList.add("sq-lastmove");
-                aSquares[idx(tc, tr)].classList.add("sq-lastmove");
-            }
-        }
-        const ft = positions[curPos].turn + freeMoves.length;
-        showCheckHl(freeGrid, ft, aSquares);
+        if (freeMoves.length > 0) { const lm = freeMoves[freeMoves.length - 1]; aSquares[idx(lm.fromCol, lm.fromRow)].classList.add("sq-lastmove"); aSquares[idx(lm.toCol, lm.toRow)].classList.add("sq-lastmove"); }
+        else { const pos = positions[curPos]; if (pos?.moveFrom) { const [fc, fr] = pos.moveFrom.split(",").map(Number); const [tc, tr] = pos.moveTo.split(",").map(Number); aSquares[idx(fc, fr)].classList.add("sq-lastmove"); aSquares[idx(tc, tr)].classList.add("sq-lastmove"); } }
+        showCheckHl(freeGrid, positions[curPos].turn + freeMoves.length, aSquares);
     } else {
         const pos = positions[curPos];
         if (pos) {
-            if (pos.moveFrom) {
-                const [fc, fr] = pos.moveFrom.split(",").map(Number);
-                const [tc, tr] = pos.moveTo.split(",").map(Number);
-                aSquares[idx(fc, fr)].classList.add("sq-lastmove");
-                aSquares[idx(tc, tr)].classList.add("sq-lastmove");
-            }
-            if (curPos > 0 && classifications[curPos]) {
-                const [tc, tr] = positions[curPos].moveTo.split(",").map(Number);
-                const sq = aSquares[idx(tc, tr)];
-                const cl = classifications[curPos];
-                const badge = document.createElement("div");
-                badge.className = "move-badge " + cl.css; badge.title = cl.label; badge.textContent = cl.sym;
-                sq.appendChild(badge);
-            }
+            if (pos.moveFrom) { const [fc, fr] = pos.moveFrom.split(",").map(Number); const [tc, tr] = pos.moveTo.split(",").map(Number); aSquares[idx(fc, fr)].classList.add("sq-lastmove"); aSquares[idx(tc, tr)].classList.add("sq-lastmove"); }
+            if (curPos > 0 && classifications[curPos]) { const [tc, tr] = positions[curPos].moveTo.split(",").map(Number); const sq = aSquares[idx(tc, tr)]; const cl = classifications[curPos]; const badge = document.createElement("div"); badge.className = "move-badge " + cl.css; badge.title = cl.label; badge.textContent = cl.sym; sq.appendChild(badge); }
             showCheckHl(pos.grid, pos.turn, aSquares);
         }
     }
-    clearArrowSVG(aSvg);
-    aRenderNotation();
-    aUpdatePlayerStrips();
+    clearArrowSVG(aSvg); aRenderNotation(); aUpdatePlayerStrips();
 }
 
 function aUpdatePlayerStrips() {
@@ -784,8 +567,7 @@ function aUpdateEvalUI(ev, isAnalysing) {
         const fc = FILES_STR.indexOf(ev.bestMove[0]), fr = 8 - parseInt(ev.bestMove[1]);
         const tc = FILES_STR.indexOf(ev.bestMove[2]), tr = 8 - parseInt(ev.bestMove[3]);
         document.getElementById("bestMoveVal").textContent = squareToAlg(fc, fr) + " → " + squareToAlg(tc, tr);
-        const mid = ev.mate !== null && ev.mate < 0 ? "am-red" : "am-green";
-        drawArrowSVG(aSvg, mid, fc, fr, tc, tr);
+        drawArrowSVG(aSvg, ev.mate !== null && ev.mate < 0 ? "am-red" : "am-green", fc, fr, tc, tr);
     } else {
         document.getElementById("bestMoveVal").textContent = "–";
         clearArrowSVG(aSvg);
@@ -834,28 +616,17 @@ function renderMoveList(nodes, container, startTurn, isVariation) {
         }
         currentRow.appendChild(token);
         if (node.variations && node.variations.length > 0) {
-            for (const vn of node.variations) {
-                const vb = document.createElement("div"); vb.className = "var-block";
-                renderMoveList(vn, vb, turn, true); container.appendChild(vb);
-            }
+            for (const vn of node.variations) { const vb = document.createElement("div"); vb.className = "var-block"; renderMoveList(vn, vb, turn, true); container.appendChild(vb); }
             currentRow = null;
         }
         if (!isVariation && ni === curPos - 1 && freeMoves.length > 0) {
             const vb = document.createElement("div"); vb.className = "var-block";
             let vt = turn + 1, vRow = null;
             freeMoves.forEach((fm, vi) => {
-                if (vt % 2 === 0 || vRow === null) {
-                    vRow = document.createElement("div"); vRow.className = "move-row";
-                    const vn = document.createElement("span"); vn.className = "move-num"; vn.textContent = (Math.floor(vt / 2) + 1) + ".";
-                    vRow.appendChild(vn); vb.appendChild(vRow);
-                }
+                if (vt % 2 === 0 || vRow === null) { vRow = document.createElement("div"); vRow.className = "move-row"; const vn = document.createElement("span"); vn.className = "move-num"; vn.textContent = (Math.floor(vt / 2) + 1) + "."; vRow.appendChild(vn); vb.appendChild(vRow); }
                 const vTok = document.createElement("span"); vTok.className = "move-token variation"; vTok.textContent = fm.san;
                 const vcl = freeClassifications[vi];
-                if (vcl) {
-                    const b = document.createElement("span"); b.className = "move-badge-inline"; b.textContent = vcl.sym;
-                    b.style.color = BADGE_COLORS[vcl.key] || "";
-                    vTok.appendChild(b);
-                }
+                if (vcl) { const b = document.createElement("span"); b.className = "move-badge-inline"; b.textContent = vcl.sym; b.style.color = BADGE_COLORS[vcl.key] || ""; vTok.appendChild(b); }
                 vRow.appendChild(vTok); vt++;
             });
             container.appendChild(vb); currentRow = null;
@@ -876,45 +647,35 @@ async function aPreAnalyseAll() {
     for (let i = 0; i < total; i++) {
         bar.style.width = Math.round((i / total) * 100) + "%";
         sub.textContent = i === 0 ? "Startstellung…" : "Zug " + Math.ceil(i / 2) + " wird bewertet…";
-
         const pos = positions[i];
         const fen = generateFEN(pos.grid, pos.turn, pos.moveStack || []);
-        evals[i] = await sfEval(fen, { depth: 20 });
+        evals[i] = await sfEval(fen, { depth: PREANALYSIS_DEPTH });
 
         if (i > 0) {
             const prev = evals[i - 1], curr = evals[i];
             const prevPos = positions[i - 1];
             const move = positions[i].moveStack?.[positions[i].moveStack.length - 1];
-
             if (prev && curr && move) {
                 const movedColor = (i - 1) % 2 === 0 ? "white" : "black";
                 const delta = movedColor === "white" ? (prev.cp - curr.cp) : (curr.cp - prev.cp);
-
                 let sacrificed = false;
                 if (prevPos) sacrificed = isSacrifice(prevPos.grid, move.fromCol, move.fromRow, move.toCol, move.toRow, move.movingPiece, prevPos.moveStack || []);
-
                 const playedUCI = FILES_STR[move.fromCol] + (8 - move.fromRow) + FILES_STR[move.toCol] + (8 - move.toRow);
                 const engineBestUCI = prev.bestMove || null;
-
                 let isOnlyGoodMove = false;
                 if (delta <= 100 || (engineBestUCI && playedUCI.slice(0, 4) !== engineBestUCI.slice(0, 4))) {
                     const prevFen = generateFEN(prevPos.grid, prevPos.turn, prevPos.moveStack || []);
-                    const mpvRes = await sfEvalMultiPV(prevFen, PREANALYSIS_MOVETIME, 3, true);
-
-                    if (mpvRes && mpvRes.length >= 2) {
-                        const bestCp  = mpvRes[0] ? (movedColor === "white" ? mpvRes[0].cp : -mpvRes[0].cp) : 0;
+                    const mpvRes = await sfEvalMultiPV(prevFen, 15, 3);
+                    if (mpvRes?.length >= 2) {
+                        const bestCp = mpvRes[0] ? (movedColor === "white" ? mpvRes[0].cp : -mpvRes[0].cp) : 0;
                         const secondCp = mpvRes[1] ? (movedColor === "white" ? mpvRes[1].cp : -mpvRes[1].cp) : -9999;
                         if (bestCp - secondCp >= 100 && bestCp >= 50) isOnlyGoodMove = true;
-                    } else if (mpvRes && mpvRes.length === 1) {
-                        isOnlyGoodMove = true;
-                    }
+                    } else if (mpvRes?.length === 1) { isOnlyGoodMove = true; }
                 }
-
                 classifications[i] = classifyMove(delta, sacrificed, prev, curr, movedColor, playedUCI, engineBestUCI, isOnlyGoodMove);
             }
         }
     }
-
     bar.style.width = "100%"; sub.textContent = "Fertig!";
     await new Promise(r => setTimeout(r, 400));
 }
@@ -922,10 +683,7 @@ async function aPreAnalyseAll() {
 async function aStartAnalysis(pgn, tags, tree) {
     pgnTags = tags; moveTree = tree;
     positions = buildPositions(tree);
-    if (positions.length < 2 && tree.length > 0) {
-        document.getElementById("pgnError").textContent = "Züge konnten nicht verarbeitet werden.";
-        return false;
-    }
+    if (positions.length < 2 && tree.length > 0) { document.getElementById("pgnError").textContent = "Züge konnten nicht verarbeitet werden."; return false; }
     document.getElementById("loadingOverlay").classList.add("show");
     await initStockfish();
     await aPreAnalyseAll();
@@ -1000,13 +758,8 @@ document.getElementById("startBotBtn").addEventListener("click", async () => {
     gBotElo = elo;
     await initStockfish();
     const botName = "Stockfish (" + elo + ")";
-    if (color === "white") {
-        document.getElementById("gNameBottom").textContent = "Du";
-        document.getElementById("gNameTop").textContent = botName;
-    } else {
-        document.getElementById("gNameBottom").textContent = botName;
-        document.getElementById("gNameTop").textContent = "Du";
-    }
+    if (color === "white") { document.getElementById("gNameBottom").textContent = "Du"; document.getElementById("gNameTop").textContent = botName; }
+    else { document.getElementById("gNameBottom").textContent = botName; document.getElementById("gNameTop").textContent = "Du"; }
     document.getElementById("gEloBottom").textContent = color === "white" ? "" : elo;
     document.getElementById("gEloTop").textContent = color === "black" ? "" : elo;
     gStartGame("bot", color, elo);
@@ -1067,9 +820,7 @@ document.getElementById("aBtnPrev").addEventListener("click", () => {
         aRefreshBoard(); aUpdateNavButtons();
         const prevEv = freeMoves.length > 0 ? freeEvals[freeMoves.length - 1] : evals[curPos];
         aUpdateEvalUI(prevEv || null, false);
-    } else {
-        aExitFreePlay(); aGoToPosition(curPos - 1);
-    }
+    } else { aExitFreePlay(); aGoToPosition(curPos - 1); }
 });
 
 document.getElementById("aBtnNext").addEventListener("click", () => { if (freeGrid === null) aGoToPosition(curPos + 1); });
