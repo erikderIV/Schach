@@ -95,7 +95,7 @@ function initStockfish() {
             }
         }, 10000);
 
-        stockfish = new Worker("stockfish-18-lite-single.js");
+        stockfish = new Worker("stockfish.js");
 
         stockfish.onerror = err => {
             console.error("Stockfish worker error:", err);
