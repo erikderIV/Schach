@@ -134,7 +134,7 @@ function initStockfish() {
 
     return new Promise((resolve, reject) => {
         if (stockfish) sfTerminate();
-        stockfish = new Worker("stockfish-18.js#https://huggingface.co/datasets/erikderIV/stockfish-18.wasm/resolve/main/stockfish-18.wasm");
+        stockfish = new Worker("stockfish-18.js#https://pub-166eb92c651049a9a716a84ec059e893.r2.dev");
         stockfish.onerror = err => {
             console.error("Stockfish worker error:", err);
             const rej = sfPending?.reject || reject;
